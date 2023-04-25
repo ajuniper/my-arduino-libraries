@@ -1,4 +1,6 @@
+#include <Arduino.h>
 #include <Update.h>
+#include <mywebserver.h>
 #include <mysyslog.h>
 
 static void serve_update_page(AsyncWebServerRequest *request, const String & msg, bool connclose=false) {
@@ -32,7 +34,7 @@ static void serve_update_post(AsyncWebServerRequest *request){
         m+="badly: ";
         m+=Update.errorString();
     }
-    syslog.logf(m);
+    syslog.logf(LOG_DAEMON|LOG_ERR,m.c_str());
     serve_update_page(request, m, true);
 }
 

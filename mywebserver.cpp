@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <AsyncTCP.h>
 #include "mywebserver.h"
 AsyncWebServer server(80);

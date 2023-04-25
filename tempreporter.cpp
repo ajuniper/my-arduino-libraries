@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <WiFi.h>
 #include "time.h"
 #include <OneWire.h>
@@ -72,16 +73,11 @@ static void serve_sensor_get(AsyncWebServerRequest * request) {
     // GET /sensor?id=XXX
     if (request->hasParam("id")) {
         x = request->getParam("id")->value();
-        int i;
-        for(i=0; i<numberOfDevices; ++i) {
-            if (x == sensorAddrs[i].str) {
-                float tempC = sensors->getTempC(sensorAddrs[i].da);
-                x = tempC;
-                response = request->beginResponse(200, "text/plain", x);
-                break;
-            }
-        }
-        if (i == numberOfDevices) {
+        float tempC = TR_get(x);
+        if (tempC < 200) {
+            x = tempC;
+            response = request->beginResponse(200, "text/plain", x);
+        } else {
             response = request->beginResponse(404, "text/plain", "Sensor id not found");
         }
     } else {
@@ -168,6 +164,7 @@ static void reporting_task(void *)
         }
     }
 }
+
 void TR_init(AsyncWebServer & server, int onewire_pin){
     char msgbuf[80];
 
@@ -181,9 +178,9 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
     if (numberOfDevices > max_sensors) { numberOfDevices = max_sensors; }
 
     // locate devices on the bus
-    sprintf(msgbuf,"Found %d devices",numberOfDevices);
+    sprintf(msgbuf,"Started with %d devices",numberOfDevices);
     Serial.println(msgbuf);
-    syslog.logf("Started with %d devices",numberOfDevices);
+    syslog.logf(msgbuf);
 
     // don't care if no FS, open will fail and no remap possible
     SPIFFS.begin();
@@ -236,5 +233,5 @@ float TR_get(const String & name) {
             return sensors->getTempC(sensorAddrs[i].da);
         }
     }
-    return 0;
+    return 999;
 }
