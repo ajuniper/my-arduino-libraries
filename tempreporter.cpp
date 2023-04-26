@@ -20,6 +20,7 @@ static DallasTemperature * sensors = NULL;
 static const int max_sensors = 10;
 struct sensorAddr {
     String str;
+    String realAddress;
     DeviceAddress da;
 };
 static sensorAddr sensorAddrs[max_sensors];
@@ -31,9 +32,10 @@ static const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <title>Temperature Sensors</title>
+  <meta http-equiv="refresh" content="60">
 </head>
 <body>
-  <h1>Temperature Sensors</h1>
+  <h1>Temperature Sensors at %TIMENOW%</h1>
   <table border="1">
   <tr><th align="left">Sensor</th><th>Reading</th></tr>
   %TEMPPLACEHOLDER%
@@ -54,11 +56,22 @@ static String processor(const String& var){
             float tempC = sensors->getTempC(sensorAddrs[i].da);
             temps+="<tr><td>";
             temps+=sensorAddrs[i].str;
+            if (sensorAddrs[i].str != sensorAddrs[i].realAddress) {
+                temps+=" (" + sensorAddrs[i].realAddress + ")";
+            }
             temps+="</td><td>";
             temps+=tempC;
             temps+="</td></tr>";
         }
         return temps;
+    } else if (var == "TIMENOW") {
+        struct tm timeinfo;
+        time_t epoch = time(NULL);
+        localtime_r(&epoch, &timeinfo);
+#define dt_len 30
+        char dt[dt_len];
+        ssize_t l = strftime(dt,dt_len,"%F %T",&timeinfo);
+        return String(dt);
     }
     return String();
 }
@@ -93,24 +106,37 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
     // GET /remap?id=XXX&to=YYY
     if (!request->hasParam("id")) {
         response = request->beginResponse(400, "text/plain", "Sensor id missing");
-    } else if (!request->hasParam("to")) {
-        // TODO report current remap
-        response = request->beginResponse(400, "text/plain", "New ID missing");
     } else {
         x = request->getParam("id")->value();
-        y = request->getParam("to")->value();
+        if (request->hasParam("to")) {
+            y = request->getParam("to")->value();
+        }
         int i;
         for(i=0; i<numberOfDevices; ++i) {
-            if (x == sensorAddrs[i].str) {
-                SPIFFS.remove(x);
-                File f = SPIFFS.open(x,"w");
-                if (f) {
-                    f.print(y);
-                    close(f);
-                    sensorAddrs[i].str = y;
-                    response = request->beginResponse(204, "text/plain", y);
+            // is this the sensor we are looking for?
+            if ((x == sensorAddrs[i].str) || (x == sensorAddrs[i].realAddress)) {
+                if (request->hasParam("to")) {
+                    // dont care about failure
+                    SPIFFS.remove(x);
+                    // is a new value specified
+                    if (!y.isEmpty()) {
+                        File f = SPIFFS.open(sensorAddrs[i].realAddress,"w");
+                        if (f) {
+                            f.print(y);
+                            close(f);
+                            sensorAddrs[i].str = y;
+                            response = request->beginResponse(204, "text/plain", y);
+                        } else {
+                            response = request->beginResponse(500, "text/plain", "Failed to create remap file");
+                        }
+                    } else {
+                        // no remap string given, just remove any current remap
+                        response = request->beginResponse(204, "text/plain", y);
+                    }
                 } else {
-                    response = request->beginResponse(500, "text/plain", "Failed to open remap file");
+                    // no "to" parameter, just report current remap
+                    x = sensorAddrs[i].realAddress + " " + sensorAddrs[i].str;
+                    response = request->beginResponse(200, "text/plain", x);
                 }
                 break;
             }
@@ -132,6 +158,12 @@ static void reporting_task(void *)
         while (WiFi.status()!= WL_CONNECTED) {
             Serial.println("Wifi not connected!");
             delay(500);
+        }
+
+        // no point continuing if there are no devices connected
+        if (numberOfDevices == 0) {
+            delay(10000);
+            continue;
         }
 
         sensors->requestTemperatures(); // Send the command to get temperatures
@@ -196,6 +228,7 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
                     sensorAddrs[i].da[4],sensorAddrs[i].da[5],
                     sensorAddrs[i].da[6],sensorAddrs[i].da[7]);
             sensorAddrs[i].str = s;
+            sensorAddrs[i].realAddress = s;
             File f = SPIFFS.open(s, "r");
             if (f) {
                 while (f.available()) {
