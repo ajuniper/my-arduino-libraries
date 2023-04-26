@@ -38,6 +38,7 @@ void WIFI_init() {
     Serial.println(WiFi.localIP());
 
     // Init and get the time
-    setenv("TZ", MY_TIMEZONE, 1);
     configTime(0, 0, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
+    setenv("TZ", MY_TIMEZONE, 1);
+    tzset();
 }
