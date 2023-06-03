@@ -5,7 +5,13 @@
 #include <DallasTemperature.h>
 #include <HTTPClient.h>
 #include <mysyslog.h>
+#if 0
 #include <SPIFFS.h>
+#define FILESYSTEM SPIFFS
+#else
+#include <LittleFS.h>
+#define FILESYSTEM LittleFS
+#endif
 #include "tempreporter.h"
 
 #include <my_secrets.h>
@@ -107,6 +113,10 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
     if (!request->hasParam("id")) {
         response = request->beginResponse(400, "text/plain", "Sensor id missing");
     } else {
+        if (!FILESYSTEM.begin()) {
+            syslog.logf("filesystem begin failed");
+        }
+
         x = request->getParam("id")->value();
         if (request->hasParam("to")) {
             y = request->getParam("to")->value();
@@ -116,18 +126,21 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
             // is this the sensor we are looking for?
             if ((x == sensorAddrs[i].str) || (x == sensorAddrs[i].realAddress)) {
                 if (request->hasParam("to")) {
+                    String fn = "/" + sensorAddrs[i].realAddress;
                     // dont care about failure
-                    SPIFFS.remove(x);
+                    FILESYSTEM.remove(fn);
                     // is a new value specified
                     if (!y.isEmpty()) {
-                        File f = SPIFFS.open(sensorAddrs[i].realAddress,"w");
+                        File f = FILESYSTEM.open(fn,"w");
                         if (f) {
                             f.print(y);
-                            close(f);
+                            f.close();
                             sensorAddrs[i].str = y;
-                            response = request->beginResponse(204, "text/plain", y);
+                            x = "Remapping "+sensorAddrs[i].realAddress+" to "+y;
+                            response = request->beginResponse(204, "text/plain", x);
+                            syslog.logf(y.c_str());
                         } else {
-                            response = request->beginResponse(500, "text/plain", "Failed to create remap file");
+                            response = request->beginResponse(500, "text/plain", "Failed to create remap file "+fn);
                         }
                     } else {
                         // no remap string given, just remove any current remap
@@ -141,6 +154,9 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
                 break;
             }
         }
+        // no need to keep the FS open
+        FILESYSTEM.end();
+
         if (i == numberOfDevices) {
             response = request->beginResponse(404, "text/plain", "Sensor id not found");
         }
@@ -215,39 +231,50 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
     syslog.logf(msgbuf);
 
     // don't care if no FS, open will fail and no remap possible
-    SPIFFS.begin();
+    if (!FILESYSTEM.begin()) {
+        sprintf(msgbuf,"filesystem begin failed, try format");
+        Serial.println(msgbuf);
+        syslog.logf(msgbuf);
+        if (!FILESYSTEM.format()) {
+            sprintf(msgbuf,"filesystem begin failed");
+            Serial.println(msgbuf);
+            syslog.logf(msgbuf);
+        } else if (!FILESYSTEM.begin()) {
+            sprintf(msgbuf,"second filesystem begin failed");
+            Serial.println(msgbuf);
+            syslog.logf(msgbuf);
+        }
+    }
 
     // Loop through each device, print out address
     for(int i=0;i<numberOfDevices; i++){
         // Search the wire for address
         if(sensors->getAddress(sensorAddrs[i].da, i)){
-            char s[20];
-            sprintf(s,"%02x-%02x%02x%02x%02x%02x%02x%02x",
+            char s[21];
+            sprintf(s,"/%02x-%02x%02x%02x%02x%02x%02x%02x",
                     sensorAddrs[i].da[0],sensorAddrs[i].da[1],
                     sensorAddrs[i].da[2],sensorAddrs[i].da[3],
                     sensorAddrs[i].da[4],sensorAddrs[i].da[5],
                     sensorAddrs[i].da[6],sensorAddrs[i].da[7]);
-            sensorAddrs[i].str = s;
-            sensorAddrs[i].realAddress = s;
-            File f = SPIFFS.open(s, "r");
+            sensorAddrs[i].str = (s+1);
+            sensorAddrs[i].realAddress = (s+1);
+            File f = FILESYSTEM.open(s, "r");
             if (f) {
                 while (f.available()) {
-                    int c = f.read();
-                    if (c >= ' ') {
-                        sensorAddrs[i].str += ((char)f.read());
-                    } else {
-                        break;
-                    }
+                    sensorAddrs[i].str = f.readString();
                 }
                 f.close();
             }
-            sprintf(msgbuf,"Device %d address %s %s", i, s, sensorAddrs[i].str.c_str());
+            sprintf(msgbuf,"Device %d address %s %s", i, (s+1), sensorAddrs[i].str.c_str());
         } else {
             sprintf(msgbuf,"Ghost device at %d", i);
         }
         Serial.println(msgbuf);
         syslog.logf(msgbuf);
     }
+    // no need to keep the FS open
+    FILESYSTEM.end();
+
     // only create readers once we are ready
 
     // Route for root / web page
