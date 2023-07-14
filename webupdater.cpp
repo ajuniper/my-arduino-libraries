@@ -1,7 +1,15 @@
 #include <Arduino.h>
+#ifndef ESP8266
 #include <Update.h>
+#endif
 #include <mywebserver.h>
 #include <mysyslog.h>
+
+#ifdef ESP8266
+#define UPDATE_ERROR Update.getErrorString()
+#else
+#define UPDATE_ERROR Update.errorString()
+#endif
 
 static void serve_update_page(AsyncWebServerRequest *request, const String & msg, bool connclose=false) {
     String m = "<html><body>";
@@ -32,7 +40,7 @@ static void serve_update_post(AsyncWebServerRequest *request){
         m+="OK";
     } else {
         m+="badly: ";
-        m+=Update.errorString();
+        m+=UPDATE_ERROR;
     }
     syslog.logf(LOG_DAEMON|LOG_ERR,m.c_str());
     serve_update_page(request, m, true);
@@ -42,16 +50,20 @@ static void serve_update_post_body(AsyncWebServerRequest *request, String filena
     if(!index){
         Serial.printf("Update Start: %s\n", filename.c_str());
         syslog.logf(LOG_DAEMON|LOG_INFO,"Update Start: %s", filename.c_str());
+#ifdef ESP8266
+        if(!Update.begin(ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)
+#else
         if(!Update.begin())
+#endif
         {
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",Update.errorString());
+            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
     if(!Update.hasError()){
         if(Update.write(data, len) != len){
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",Update.errorString());
+            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
     if(final){
@@ -60,7 +72,7 @@ static void serve_update_post_body(AsyncWebServerRequest *request, String filena
             syslog.logf(LOG_DAEMON|LOG_INFO,"Update success");
         } else {
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",Update.errorString());
+            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
 }
