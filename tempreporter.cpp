@@ -1,9 +1,13 @@
 #include <Arduino.h>
-#include <WiFi.h>
+#include <mywifi.h>
 #include "time.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#ifdef ESP8266
+#include <ESP8266HTTPClient.h>
+#else
 #include <HTTPClient.h>
+#endif
 #include <mysyslog.h>
 #if 0
 #include <SPIFFS.h>
@@ -109,6 +113,7 @@ static void serve_sensor_get(AsyncWebServerRequest * request) {
 static void serve_remap_get(AsyncWebServerRequest *request) {
     String x,y;
     AsyncWebServerResponse *response = nullptr;
+    int action = 0;
     // GET /remap?id=XXX&to=YYY
     if (!request->hasParam("id")) {
         response = request->beginResponse(400, "text/plain", "Sensor id missing");
@@ -126,46 +131,101 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
             // is this the sensor we are looking for?
             if ((x == sensorAddrs[i].str) || (x == sensorAddrs[i].realAddress)) {
                 if (request->hasParam("to")) {
-                    String fn = "/" + sensorAddrs[i].realAddress;
-                    // dont care about failure
-                    FILESYSTEM.remove(fn);
-                    // is a new value specified
-                    if (!y.isEmpty()) {
-                        File f = FILESYSTEM.open(fn,"w");
-                        if (f) {
-                            f.print(y);
-                            f.close();
-                            sensorAddrs[i].str = y;
-                            x = "Remapping "+sensorAddrs[i].realAddress+" to "+y;
-                            response = request->beginResponse(204, "text/plain", x);
-                            syslog.logf(y.c_str());
-                        } else {
-                            response = request->beginResponse(500, "text/plain", "Failed to create remap file "+fn);
-                        }
-                    } else {
-                        // no remap string given, just remove any current remap
-                        response = request->beginResponse(204, "text/plain", y);
-                    }
+                    action = 1;
+                    sensorAddrs[i].str = y;
+                    x = sensorAddrs[i].realAddress;
+                    break;
                 } else {
                     // no "to" parameter, just report current remap
                     x = sensorAddrs[i].realAddress + " " + sensorAddrs[i].str;
                     response = request->beginResponse(200, "text/plain", x);
+                    action = 2;
                 }
                 break;
             }
         }
+
+        // if we didn't find an existing sensor then check if the id looks like
+        // a sensor address - if it does then we save the remap file for later
+        if ((action == 0) && (x.length() == 17)) {
+            action = 2;
+            for (i=0; i<17; ++i) {
+                if (i == 2) {
+                    if (x[i] != '-') {
+                        action = 0;
+                        break;
+                    }
+                } else {
+                    if (!isHexadecimalDigit(x[i])) {
+                        action = 0;
+                        break;
+                    }
+                }
+            }
+            // is the remap id a valid sensor ID?
+            if (action == 2) {
+                // valid remap id
+                if (request->hasParam("to")) {
+                    // and we have a new name so we will save that
+                    action = 1;
+                } else {
+                    // no "to" parameter, just report current remap from file (if any)
+                    y = "/" + x;
+                    File f = FILESYSTEM.open(y.c_str(), "r");
+                    if (f) {
+                        while (f.available()) {
+                            y = f.readString();
+                        }
+                        f.close();
+                    } else {
+                        y = "(no remap)";
+                    }
+                    x += " " + y + " (sensor not present)";
+                    response = request->beginResponse(200, "text/plain", x);
+                }
+            }
+        }
+
+        // must save rewrite, new value is in y
+        if (action == 1) {
+            String fn = "/" + x;
+            // dont care about failure
+            FILESYSTEM.remove(fn);
+            // is a new value specified
+            if (!y.isEmpty()) {
+                File f = FILESYSTEM.open(fn,"w");
+                if (f) {
+                    f.print(y);
+                    f.close();
+                    x = "Remapping "+x+" to "+y;
+                    response = request->beginResponse(200, "text/plain", x);
+                    syslog.logf(x.c_str());
+                } else {
+                    response = request->beginResponse(500, "text/plain", "Failed to create remap file "+fn);
+                }
+            } else {
+                // no remap string given, just remove any current remap
+                y = "Remap removed for "+x;
+                response = request->beginResponse(200, "text/plain", y);
+            }
+        }
+
         // no need to keep the FS open
         FILESYSTEM.end();
 
-        if (i == numberOfDevices) {
-            response = request->beginResponse(404, "text/plain", "Sensor id not found");
+        if (action == 0) {
+            response = request->beginResponse(404, "text/plain", "Sensor id "+x+" not found");
         }
     }
     response->addHeader("Connection", "close");
     request->send(response);
 }
 
+#ifdef ESP8266
+void loop()
+#else
 static void reporting_task(void *)
+#endif
 {
     while (1) {
         time_t now = time(NULL);
@@ -282,8 +342,10 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
     server.on("/api", HTTP_GET, serve_sensor_get);
     server.on("/remap", HTTP_GET, serve_remap_get);
 
+#ifndef ESP8266
     // temperature logging
     xTaskCreate(reporting_task, "TR", 10000, NULL, 1, NULL);
+#endif
 }
 
 float TR_get(const String & name) {
