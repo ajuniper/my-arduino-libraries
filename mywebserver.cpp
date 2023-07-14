@@ -1,5 +1,9 @@
 #include <Arduino.h>
+#ifdef ESP8266
+#include <ESPAsyncTCP.h>
+#else
 #include <AsyncTCP.h>
+#endif
 #include "mywebserver.h"
 AsyncWebServer server(80);
 
