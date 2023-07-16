@@ -20,6 +20,11 @@
 
 #include <my_secrets.h>
 
+// how frequently we take readings
+#define INTERVAL_SAMPLE 5
+// how frequently we report readings
+#define INTERVAL_REPORT 60
+
 //Your influx Domain name with URL path or IP address with path
 static const char* serverName = MY_INFLUX_DB;
 static const char* authtoken = MY_INFLUX_AUTHTOKEN;
@@ -281,6 +286,8 @@ void loop()
 static void reporting_task(void *)
 #endif
 {
+    time_t next_report = 0;
+
     while (1) {
         time_t now = time(NULL);
 
@@ -297,31 +304,37 @@ static void reporting_task(void *)
         }
 
         sensors->requestTemperatures(); // Send the command to get temperatures
-        char post_data[80 * numberOfDevices];
-        char * buf = post_data;
 
         // Loop through each real device, record temperature data
         for(int i=0;i<numberOfDevices; i++){
             // Search the wire for address
             float tempC = sensors->getTempC(sensorAddrs[i].da);
             sensorAddrs[i].lastReading = tempC;
-            buf += sprintf(buf, "temperature,t=%s value=%f %ld000000000\n", sensorAddrs[i].str.c_str(),tempC,now); 
         }
 
-        WiFiClient client;
-        HTTPClient http;
+        if (now > next_report) {
+            char post_data[80 * numberOfDevices];
+            char * buf = post_data;
+            for(int i=0;i<numberOfDevices; i++){
+                buf += sprintf(buf, "temperature,t=%s value=%f %ld000000000\n", sensorAddrs[i].str.c_str(),sensorAddrs[i].lastReading,now); 
+            }
+            // time to report temperatures
+            next_report = now + INTERVAL_REPORT;
+            WiFiClient client;
+            HTTPClient http;
 
-        // curl -H "Authorization: Token xxx==" -i -XPOST "${influx}${db}" --data-binary @-
-        // Your Domain name with URL path or IP address with path
-        http.begin(client, serverName);
-        // Specify content-type header
-        http.addHeader("Authorization", authtoken);
-        // Send HTTP POST request
-        int httpResponseCode = http.POST(post_data);
-        // Free resources
-        http.end();
+            // curl -H "Authorization: Token xxx==" -i -XPOST "${influx}${db}" --data-binary @-
+            // Your Domain name with URL path or IP address with path
+            http.begin(client, serverName);
+            // Specify content-type header
+            http.addHeader("Authorization", authtoken);
+            // Send HTTP POST request
+            int httpResponseCode = http.POST(post_data);
+            // Free resources
+            http.end();
+        }
 
-        int d = 60+now-time(NULL);
+        int d = INTERVAL_SAMPLE+now-time(NULL);
         if (d > 0) {
             delay(d*1000);
         }
