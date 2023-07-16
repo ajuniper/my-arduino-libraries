@@ -32,10 +32,11 @@ struct sensorAddr {
     String str;
     String realAddress;
     DeviceAddress da;
+    float lastReading;
 };
 static sensorAddr sensorAddrs[max_sensors];
 
-// Number of temperature devices found
+// Number of real temperature devices found
 static int numberOfDevices = 0;
 
 static const char index_html[] PROGMEM = R"rawliteral(
@@ -61,12 +62,17 @@ static String processor(const String& var){
         DeviceAddress da; 
         char das[20];
         // Loop through each device, print out temperature data
-        for(int i=0;i<numberOfDevices; i++){
-            // Search the wire for address
-            float tempC = sensors->getTempC(sensorAddrs[i].da);
+        for(int i=0;i<max_sensors; i++){
+            if (sensorAddrs[i].str.isEmpty()) {
+                // invalid, skip
+                continue;
+            }
+            float tempC = sensorAddrs[i].lastReading;
             temps+="<tr><td>";
             temps+=sensorAddrs[i].str;
-            if (sensorAddrs[i].str != sensorAddrs[i].realAddress) {
+            if (sensorAddrs[i].realAddress.isEmpty()) {
+                temps+=" (fake)";
+            } else if (sensorAddrs[i].str != sensorAddrs[i].realAddress) {
                 temps+=" (" + sensorAddrs[i].realAddress + ")";
             }
             temps+="</td><td>";
@@ -110,9 +116,56 @@ static void serve_sensor_get(AsyncWebServerRequest * request) {
     request->send(response);
 }
 
+static void serve_sensor_fake(AsyncWebServerRequest * request) {
+    AsyncWebServerResponse *response = nullptr;
+    // GET /sensor?id=XXX&temp=x.xx
+    if (!request->hasParam("id")) {
+        response = request->beginResponse(400, "text/plain", "Sensor id missing");
+    } else if (!request->hasParam("temp")) {
+        response = request->beginResponse(400, "text/plain", "Temperature missing");
+    } else {
+        String x;
+        float temp;
+        int i;
+        x = request->getParam("id")->value();
+        for (i=0; i<x.length(); ++i) {
+            // only accept integer values
+            if (!isDigit(x[i])) {
+                response = request->beginResponse(400, "text/plain", "Cannot parse temperature");
+                break;
+            }
+        }
+
+        if (response != nullptr) {
+            response = request->beginResponse(400, "text/plain", "Invalid temperature");
+        } else {
+            temp = atof(x.c_str());
+            x = request->getParam("id")->value();
+            for (i=numberOfDevices; i<max_sensors; ++i) {
+                if ((sensorAddrs[i].str.isEmpty()) ||
+                    (sensorAddrs[i].str == x)) {
+                    sensorAddrs[i].str = x;
+                    sensorAddrs[i].lastReading = temp;
+                    break;
+                }
+            }
+            if (i == numberOfDevices) {
+                response = request->beginResponse(400, "text/plain", "Too many fakes");
+            } else {
+                // all ok, report the parsed value
+                serve_sensor_get(request);
+                return;
+            }
+        }
+    }
+    response->addHeader("Connection", "close");
+    request->send(response);
+}
+
 static void serve_remap_get(AsyncWebServerRequest *request) {
     String x,y;
     AsyncWebServerResponse *response = nullptr;
+    // 0=not found, 1=add remap, 2=report current remap
     int action = 0;
     // GET /remap?id=XXX&to=YYY
     if (!request->hasParam("id")) {
@@ -127,6 +180,7 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
             y = request->getParam("to")->value();
         }
         int i;
+        // we only consider real sensors in this loop
         for(i=0; i<numberOfDevices; ++i) {
             // is this the sensor we are looking for?
             if ((x == sensorAddrs[i].str) || (x == sensorAddrs[i].realAddress)) {
@@ -246,10 +300,11 @@ static void reporting_task(void *)
         char post_data[80 * numberOfDevices];
         char * buf = post_data;
 
-        // Loop through each device, print out temperature data
+        // Loop through each real device, record temperature data
         for(int i=0;i<numberOfDevices; i++){
             // Search the wire for address
             float tempC = sensors->getTempC(sensorAddrs[i].da);
+            sensorAddrs[i].lastReading = tempC;
             buf += sprintf(buf, "temperature,t=%s value=%f %ld000000000\n", sensorAddrs[i].str.c_str(),tempC,now); 
         }
 
@@ -341,6 +396,7 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
     server.on("/temperatures", HTTP_GET, serve_root_get);
     server.on("/api", HTTP_GET, serve_sensor_get);
     server.on("/remap", HTTP_GET, serve_remap_get);
+    server.on("/fake", HTTP_GET, serve_sensor_fake);
 
 #ifndef ESP8266
     // temperature logging
@@ -350,9 +406,12 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
 
 float TR_get(const String & name) {
     int i;
-    for(i=0; i<numberOfDevices; ++i) {
+    for(i=0; i<max_sensors; ++i) {
+        if (sensorAddrs[i].str.isEmpty()) {
+            continue;
+        }
         if (name == sensorAddrs[i].str) {
-            return sensors->getTempC(sensorAddrs[i].da);
+            return sensorAddrs[i].lastReading;
         }
     }
     return 999;
