@@ -9,13 +9,7 @@
 #include <HTTPClient.h>
 #endif
 #include <mysyslog.h>
-#if 0
-#include <SPIFFS.h>
-#define FILESYSTEM SPIFFS
-#else
 #include <LittleFS.h>
-#define FILESYSTEM LittleFS
-#endif
 #include "tempreporter.h"
 
 #include <my_secrets.h>
@@ -176,7 +170,7 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
     if (!request->hasParam("id")) {
         response = request->beginResponse(400, "text/plain", "Sensor id missing");
     } else {
-        if (!FILESYSTEM.begin()) {
+        if (!LittleFS.begin()) {
             syslog.logf("filesystem begin failed");
         }
 
@@ -230,7 +224,7 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
                 } else {
                     // no "to" parameter, just report current remap from file (if any)
                     y = "/" + x;
-                    File f = FILESYSTEM.open(y.c_str(), "r");
+                    File f = LittleFS.open(y.c_str(), "r");
                     if (f) {
                         while (f.available()) {
                             y = f.readString();
@@ -249,10 +243,10 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
         if (action == 1) {
             String fn = "/" + x;
             // dont care about failure
-            FILESYSTEM.remove(fn);
+            LittleFS.remove(fn);
             // is a new value specified
             if (!y.isEmpty()) {
-                File f = FILESYSTEM.open(fn,"w");
+                File f = LittleFS.open(fn,"w");
                 if (f) {
                     f.print(y);
                     f.close();
@@ -270,7 +264,7 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
         }
 
         // no need to keep the FS open
-        FILESYSTEM.end();
+        LittleFS.end();
 
         if (action == 0) {
             response = request->beginResponse(404, "text/plain", "Sensor id "+x+" not found");
@@ -359,15 +353,15 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
     syslog.logf(msgbuf);
 
     // don't care if no FS, open will fail and no remap possible
-    if (!FILESYSTEM.begin()) {
+    if (!LittleFS.begin()) {
         sprintf(msgbuf,"filesystem begin failed, try format");
         Serial.println(msgbuf);
         syslog.logf(msgbuf);
-        if (!FILESYSTEM.format()) {
+        if (!LittleFS.format()) {
             sprintf(msgbuf,"filesystem begin failed");
             Serial.println(msgbuf);
             syslog.logf(msgbuf);
-        } else if (!FILESYSTEM.begin()) {
+        } else if (!LittleFS.begin()) {
             sprintf(msgbuf,"second filesystem begin failed");
             Serial.println(msgbuf);
             syslog.logf(msgbuf);
@@ -386,7 +380,7 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
                     sensorAddrs[i].da[6],sensorAddrs[i].da[7]);
             sensorAddrs[i].str = (s+1);
             sensorAddrs[i].realAddress = (s+1);
-            File f = FILESYSTEM.open(s, "r");
+            File f = LittleFS.open(s, "r");
             if (f) {
                 while (f.available()) {
                     sensorAddrs[i].str = f.readString();
@@ -401,7 +395,7 @@ void TR_init(AsyncWebServer & server, int onewire_pin){
         syslog.logf(msgbuf);
     }
     // no need to keep the FS open
-    FILESYSTEM.end();
+    LittleFS.end();
 
     // only create readers once we are ready
 
