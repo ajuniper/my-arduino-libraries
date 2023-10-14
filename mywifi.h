@@ -4,4 +4,4 @@
 #else
 #include <WiFi.h>
 #endif
-extern void WIFI_init();
+extern void WIFI_init(const char * hostname = NULL, bool wait_for_wifi = false);

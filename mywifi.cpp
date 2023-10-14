@@ -31,35 +31,40 @@ static void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
 }
 
 #ifdef ESP8266
-static void WiFiStationConnected(const WiFiEventStationModeGotIP& event){
+static void WiFiGotIP(const WiFiEventStationModeGotIP& event){
 #else
-static void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info){
+static void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info){
 #endif
     if (disconnecttime != 0) {
         syslog.logf("Wifi connected again after %d seconds", time(NULL) - disconnecttime);
         disconnecttime = 0;
+    } else {
+        // at boot there will have been no prior disconnect
+        // Init and get the time
+        Serial.println(WiFi.localIP());
+        //configTime(0, 0, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
+        syslog.logf(LOG_DAEMON | LOG_WARNING, "started");
     }
 }
 
-void WIFI_init() {
+void WIFI_init(const char * hostname, bool wait_for_wifi) {
     Serial.print("Connecting");
+    if (hostname && *hostname) {
+        WiFi.setHostname(hostname);
+    }
     WiFi.begin(ssid, password);
 #ifdef ESP8266
-    wifiConnectHandler = WiFi.onStationModeGotIP(WiFiStationConnected);
+    wifiConnectHandler = WiFi.onStationModeGotIP(WiFiGotIP);
     wifiDisconnectHandler = WiFi.onStationModeDisconnected(WiFiStationDisconnected);
 #else
     WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-    WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
+    WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
 #endif
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
+    if (wait_for_wifi) {
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(500);
+            Serial.print(".");
+        }
     }
-    Serial.println("WiFi connected.");
-    Serial.println(WiFi.localIP());
 
-    // Init and get the time
-    configTime(0, 0, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
-    setenv("TZ", MY_TIMEZONE, 1);
-    tzset();
 }
