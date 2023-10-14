@@ -117,7 +117,7 @@ static void serve_sensor_get(AsyncWebServerRequest * request) {
 
 static void serve_sensor_fake(AsyncWebServerRequest * request) {
     AsyncWebServerResponse *response = nullptr;
-    // GET /sensor?id=XXX&temp=x.xx
+    // GET /fake?id=XXX&temp=x.xx
     if (!request->hasParam("id")) {
         response = request->beginResponse(400, "text/plain", "Sensor id missing");
     } else if (!request->hasParam("temp")) {
@@ -126,7 +126,7 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
         String x;
         float temp;
         int i;
-        x = request->getParam("id")->value();
+        x = request->getParam("temp")->value();
         for (i=0; i<x.length(); ++i) {
             // only accept integer values
             if (!isDigit(x[i])) {
@@ -140,15 +140,17 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
         } else {
             temp = atof(x.c_str());
             x = request->getParam("id")->value();
+            bool found = false;
             for (i=numberOfDevices; i<max_sensors; ++i) {
                 if ((sensorAddrs[i].str.isEmpty()) ||
                     (sensorAddrs[i].str == x)) {
                     sensorAddrs[i].str = x;
                     sensorAddrs[i].lastReading = temp;
+                    found = true;
                     break;
                 }
             }
-            if (i == numberOfDevices) {
+            if (!found) {
                 response = request->beginResponse(400, "text/plain", "Too many fakes");
             } else {
                 // all ok, report the parsed value
