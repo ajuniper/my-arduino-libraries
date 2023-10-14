@@ -24,6 +24,7 @@ static void timeSyncCallback(struct timeval *tv)
 void mytime_setup(const char * tz, int pin_clk, int pin_data, int pin_rst)
 {
     setenv("TZ", tz, 1);
+    tzset();
 
     // create RTC object
     rtc = new ErriezDS1302(pin_clk, pin_data, pin_rst);
@@ -66,5 +67,5 @@ void mytime_setup(const char * tz, int pin_clk, int pin_data, int pin_rst)
     sntp_set_sync_interval(3600*000);
 
     // SNTP gets started when Wifi connects
-    //configTime(0, 0, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
+    configTzTime(tz, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
 }
