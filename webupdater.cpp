@@ -78,7 +78,7 @@ static void serve_update_post_body(AsyncWebServerRequest *request, String filena
 }
 
 static void serve_reboot_get(AsyncWebServerRequest *request) {
-    request->send(200, "text/html", "<html><body>Rebooting... bye bye...</body></html>");
+    request->send(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Rebooting... bye bye...</body></html>");
     syslog.logf(LOG_DAEMON|LOG_CRIT,"Restarting");
     Serial.printf("Restarting");
     delay(1000);
