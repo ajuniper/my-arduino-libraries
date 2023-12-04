@@ -18,7 +18,7 @@ static void serve_update_page(AsyncWebServerRequest *request, const String & msg
         m+=msg;
         m+="</p>";
     }
-    m+="<form method='POST' action='/update' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update'></form><p/><p><a href=\"/reboot\">Reboot</a></p><p>Build date: ";
+    m+="<form method='POST' action='update' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update'></form><p/><p><a href=\"reboot\">Reboot</a></p><p>Build date: ";
     m+=__DATE__;
     m+=" ";
     m+=__TIME__;
