@@ -56,7 +56,7 @@ class mysensor {
                 str = a;
                 realAddress = a;
                 // load the remapping if present
-                if (prefs.getType(realAddress.c_str()) == PT_STR) {
+                if (prefs.getBytesLength(realAddress.c_str()) > 0) {
                     str = prefs.getString(realAddress.c_str());
                 }
             }
@@ -392,7 +392,7 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
                 } else {
                     // no "to" parameter, just report current remap from file (if any)
                     y = "/" + x;
-                    if (prefs.getType(y.c_str()) == PT_STR) {
+                    if (prefs.getBytesLength(y.c_str()) > 0) {
                         y = prefs.getString(y.c_str());
                     } else {
                         y = "(no remap)";
