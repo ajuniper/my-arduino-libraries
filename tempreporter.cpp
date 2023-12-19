@@ -18,7 +18,7 @@
 #include <HTTPClient.h>
 #endif
 #include <mysyslog.h>
-#include <LittleFS.h>
+#include "myconfig.h"
 #include "tempreporter.h"
 
 #include <my_secrets.h>
@@ -55,14 +55,9 @@ class mysensor {
             if (a != NULL && *a != 0) {
                 str = a;
                 realAddress = a;
-                String filename = "/";
-                filename += a;
-                File f = LittleFS.open(filename, "r");
-                if (f) {
-                    while (f.available()) {
-                        str = f.readString();
-                    }
-                    f.close();
+                // load the remapping if present
+                if (prefs.getType(realAddress.c_str()) == PT_STR) {
+                    str = prefs.getString(realAddress.c_str());
                 }
             }
         }
@@ -223,41 +218,23 @@ static void serve_pin_get(AsyncWebServerRequest * request) {
         x = request->getParam("id")->value();
         if (x == "dht11") {
             if (p != "") {
-                File f = LittleFS.open("/dht11.pin","w");
-                if (f) {
-                    f.print(p);
-                    f.close();
-                    syslog.logf("Set dht11 pin to %s",p.c_str());
+                if (prefs.putInt("dht11.pin",p.toInt()) != 4) {
+                    response = request->beginResponse(500, "text/plain", "Failed to create dht11 pin setting dht11.pin");
                 } else {
-                    response = request->beginResponse(500, "text/plain", "Failed to create dht11 pin setting file /dht11.pin");
+                    syslog.logf("Set dht11 pin to %s",p.c_str());
                 }
             } else {
-                File f = LittleFS.open("/dht11.pin", "r");
-                if (f) {
-                    while (f.available()) {
-                        p += f.readString();
-                    }
-                    f.close();
-                }
+                p = prefs.getInt("dht11.pin");
             }
         } else if (x == "ds18b20") {
             if (p != "") {
-                File f = LittleFS.open("/ds18b20.pin","w");
-                if (f) {
-                    f.print(p);
-                    f.close();
-                    syslog.logf("Set ds18b20 pin to %s",p.c_str());
+                if (prefs.putInt("ds18b20.pin",p.toInt()) != 4) {
+                    response = request->beginResponse(500, "text/plain", "Failed to create ds18b20 pin setting file ds18b20.pin");
                 } else {
-                    response = request->beginResponse(500, "text/plain", "Failed to create ds18b20 pin setting file /ds18b20.pin");
+                    syslog.logf("Set ds18b20 pin to %s",p.c_str());
                 }
             } else {
-                File f = LittleFS.open("/ds18b20.pin", "r");
-                if (f) {
-                    while (f.available()) {
-                        p += f.readString();
-                    }
-                    f.close();
-                }
+                p = prefs.getInt("ds18b20.pin");
             }
         } else {
             response = request->beginResponse(404, "text/plain", "Sensor type invalid");
@@ -415,12 +392,8 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
                 } else {
                     // no "to" parameter, just report current remap from file (if any)
                     y = "/" + x;
-                    File f = LittleFS.open(y.c_str(), "r");
-                    if (f) {
-                        while (f.available()) {
-                            y = f.readString();
-                        }
-                        f.close();
+                    if (prefs.getType(y.c_str()) == PT_STR) {
+                        y = prefs.getString(y.c_str());
                     } else {
                         y = "(no remap)";
                     }
@@ -432,24 +405,19 @@ static void serve_remap_get(AsyncWebServerRequest *request) {
 
         // must save rewrite, new value is in y
         if (action == 1) {
-            String fn = "/" + x;
-            // dont care about failure
-            LittleFS.remove(fn);
             // is a new value specified
             if (!y.isEmpty()) {
-                File f = LittleFS.open(fn,"w");
-                if (f) {
-                    f.print(y);
-                    f.close();
+                if (prefs.putString(x.c_str(),y) == y.length()) {
                     x = "Remapping "+x+" to "+y;
                     response = request->beginResponse(200, "text/plain", x);
                     syslog.logf(x.c_str());
                 } else {
-                    response = request->beginResponse(500, "text/plain", "Failed to create remap file "+fn);
+                    response = request->beginResponse(500, "text/plain", "Failed to create remap file "+x);
                 }
             } else {
                 // no remap string given, just remove any current remap
                 y = "Remap removed for "+x;
+                prefs.remove(x.c_str());
                 response = request->beginResponse(200, "text/plain", y);
             }
         }
@@ -534,8 +502,6 @@ static void add_sensor(mysensor * s) {
 static void TR_reporting_task(void *)
 {
     while (1) {
-        time_t now = time(NULL);
-
         time_t next = TR_report_data();
         time_t now = time(NULL);
         if (next > now) {
@@ -549,31 +515,7 @@ void TR_init(AsyncWebServer & server){
     char msgbuf[80];
     int pin = -1;
 
-    // don't care if no FS, open will fail and no remap possible
-    if (!LittleFS.begin()) {
-        sprintf(msgbuf,"filesystem begin failed, try format");
-        Serial.println(msgbuf);
-        syslog.logf(msgbuf);
-        if (!LittleFS.format()) {
-            sprintf(msgbuf,"filesystem begin failed");
-            Serial.println(msgbuf);
-            syslog.logf(msgbuf);
-        } else if (!LittleFS.begin()) {
-            sprintf(msgbuf,"second filesystem begin failed");
-            Serial.println(msgbuf);
-            syslog.logf(msgbuf);
-        }
-    }
-
-    File f = LittleFS.open("/ds18b20.pin","r");
-    if (f) {
-        String s;
-        while (f.available()) {
-            s += f.readString();
-        }
-        f.close();
-        pin = s.toInt();
-    }
+    pin = prefs.getInt("ds18b20.pin",-1);
     if (pin != -1) {
         sensors = new DallasTemperature(new OneWire(pin));
 
@@ -603,16 +545,7 @@ void TR_init(AsyncWebServer & server){
         }
     }
 
-    f = LittleFS.open("/dht11.pin","r");
-    pin = -1;
-    if (f) {
-        String s;
-        while (f.available()) {
-            s += f.readString();
-        }
-        f.close();
-        pin = s.toInt();
-    }
+    pin = prefs.getInt("dht11.pin",-1);
     if (pin != -1) {
 #ifdef ADAFRUIT_DHT11
         dht11 = new DHT(pin, DHT11);
