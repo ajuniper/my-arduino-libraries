@@ -23,10 +23,19 @@
 
 #include <my_secrets.h>
 
+/*
+Config nodes:
+        remap.ADDR = label
+        pin.[ds18b20|dht11] = number
+        temprep.poll = seconds
+        temprep.submit = seconds
+*/
 // how frequently we take readings
 #define INTERVAL_SAMPLE 5
+int interval_sample = INTERVAL_SAMPLE;
 // how frequently we report readings
 #define INTERVAL_REPORT 60
+int interval_report = INTERVAL_REPORT;
 
 //Your influx Domain name with URL path or IP address with path
 static const char* serverName = MY_INFLUX_DB;
@@ -53,12 +62,9 @@ class mysensor {
         float lastReading;
         void setAddr(const char *a) {
             if (a != NULL && *a != 0) {
-                str = a;
                 realAddress = a;
                 // load the remapping if present
-                if (prefs.getBytesLength(realAddress.c_str()) > 0) {
-                    str = prefs.getString(realAddress.c_str());
-                }
+                str = MyCfgGetString("remap",a,a);
             }
         }
     private:
@@ -203,55 +209,53 @@ static String processor(const String& var){
     return String();
 }
 
-static void serve_root_get(AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", index_html, processor);
+static const char * handleInterval(const char * name, const String & id, int &value) {
+    if (id == "poll") {
+        // all ok, save the value
+        interval_sample = value;
+        return NULL;
+    } else if (id == "submit") {
+        // all ok, save the value
+        interval_report = value;
+        return NULL;
+    } else {
+        return "interval type not recognised";
+    }
 }
 
-static void serve_pin_get(AsyncWebServerRequest * request) {
-    String x,p;
-    AsyncWebServerResponse *response = nullptr;
-    // GET /pin?id=(ds18b20|dht11)&pin=N
-    if (request->hasParam("pin")) {
-        p = request->getParam("pin")->value();
-    }
-    if (request->hasParam("id")) {
-        x = request->getParam("id")->value();
-        if (x == "dht11") {
-            if (p != "") {
-                if (prefs.putInt("dht11.pin",p.toInt()) != 4) {
-                    response = request->beginResponse(500, "text/plain", "Failed to create dht11 pin setting dht11.pin");
-                } else {
-                    syslog.logf("Set dht11 pin to %s",p.c_str());
-                }
-            } else {
-                p = prefs.getInt("dht11.pin");
-            }
-        } else if (x == "ds18b20") {
-            if (p != "") {
-                if (prefs.putInt("ds18b20.pin",p.toInt()) != 4) {
-                    response = request->beginResponse(500, "text/plain", "Failed to create ds18b20 pin setting file ds18b20.pin");
-                } else {
-                    syslog.logf("Set ds18b20 pin to %s",p.c_str());
-                }
-            } else {
-                p = prefs.getInt("ds18b20.pin");
-            }
-        } else {
-            response = request->beginResponse(404, "text/plain", "Sensor type invalid");
-        }
+static const char * handleConfigPin(const char * name, const String & id, int &value) {
+    if (id == "dht11") {
+        // all ok, save the value
+        return NULL;
+    } else if (id == "ds18b20") {
+        // all ok, save the value
+        return NULL;
     } else {
-        response = request->beginResponse(400, "text/plain", "Sensor type missing");
+        return "sensor type not recognised";
     }
+}
 
-    if (response == NULL) {
-        if (p.isEmpty()) {
-            p = "not assigned";
+static const char * handleConfigRemap(const char * name, const String & id, String &value) {
+    int i;
+    String x = id;
+    // we only consider real sensors in this loop
+    for(i=0; i<numberOfDevices; ++i) {
+        // is this the sensor we are looking for?
+        if ((x == sensorAddrs[i]->getName()) ||
+            (x == sensorAddrs[i]->getAddr())) {
+            // found the sensor, save the remap
+            sensorAddrs[i]->setName(value);
+            return NULL;
         }
-        response = request->beginResponse(200, "text/plain", p);
     }
 
-    response->addHeader("Connection", "close");
-    request->send(response);
+    // if we didn't find an existing sensor then let it be saved anyway
+    // as the sensor may appear later
+    return NULL;
+}
+
+static void serve_root_get(AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html", index_html, processor);
 }
 
 static void serve_sensor_get(AsyncWebServerRequest * request) {
@@ -332,108 +336,15 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
     request->send(response);
 }
 
-static void serve_remap_get(AsyncWebServerRequest *request) {
-    String x,y;
-    AsyncWebServerResponse *response = nullptr;
-    // 0=not found, 1=add remap, 2=report current remap
-    int action = 0;
-    // GET /remap?id=XXX&to=YYY
-    if (!request->hasParam("id")) {
-        response = request->beginResponse(400, "text/plain", "Sensor id missing");
-    } else {
-        x = request->getParam("id")->value();
-        if (request->hasParam("to")) {
-            y = request->getParam("to")->value();
-        }
-        int i;
-        // we only consider real sensors in this loop
-        for(i=0; i<numberOfDevices; ++i) {
-            // is this the sensor we are looking for?
-            if ((x == sensorAddrs[i]->getName()) ||
-                (x == sensorAddrs[i]->getAddr())) {
-                if (request->hasParam("to")) {
-                    action = 1;
-                    sensorAddrs[i]->setName(y);
-                    x = sensorAddrs[i]->getAddr();
-                    break;
-                } else {
-                    // no "to" parameter, just report current remap
-                    x = sensorAddrs[i]->getAddr() + " " + sensorAddrs[i]->getName();
-                    response = request->beginResponse(200, "text/plain", x);
-                    action = 2;
-                }
-                break;
-            }
-        }
-
-        // if we didn't find an existing sensor then check if the id looks like
-        // a sensor address - if it does then we save the remap file for later
-        if ((action == 0) && (x.length() == 17)) {
-            action = 2;
-            for (i=0; i<17; ++i) {
-                if (i == 2) {
-                    if (x[i] != '-') {
-                        action = 0;
-                        break;
-                    }
-                } else {
-                    if (!isHexadecimalDigit(x[i])) {
-                        action = 0;
-                        break;
-                    }
-                }
-            }
-            // is the remap id a valid sensor ID?
-            if (action == 2) {
-                // valid remap id
-                if (request->hasParam("to")) {
-                    // and we have a new name so we will save that
-                    action = 1;
-                } else {
-                    // no "to" parameter, just report current remap from file (if any)
-                    y = "/" + x;
-                    if (prefs.getBytesLength(y.c_str()) > 0) {
-                        y = prefs.getString(y.c_str());
-                    } else {
-                        y = "(no remap)";
-                    }
-                    x += " " + y + " (sensor not present)";
-                    response = request->beginResponse(200, "text/plain", x);
-                }
-            }
-        }
-
-        // must save rewrite, new value is in y
-        if (action == 1) {
-            // is a new value specified
-            if (!y.isEmpty()) {
-                if (prefs.putString(x.c_str(),y) == y.length()) {
-                    x = "Remapping "+x+" to "+y;
-                    response = request->beginResponse(200, "text/plain", x);
-                    syslog.logf(x.c_str());
-                } else {
-                    response = request->beginResponse(500, "text/plain", "Failed to create remap file "+x);
-                }
-            } else {
-                // no remap string given, just remove any current remap
-                y = "Remap removed for "+x;
-                prefs.remove(x.c_str());
-                response = request->beginResponse(200, "text/plain", y);
-            }
-        }
-
-        if (action == 0) {
-            response = request->beginResponse(404, "text/plain", "Sensor id "+x+" not found");
-        }
-    }
-    response->addHeader("Connection", "close");
-    request->send(response);
-}
-
 static time_t next_report = 0;
 time_t TR_report_data(void)
 {
     time_t now = time(NULL);
+
+    // wait for time to be known
+    if (now < 1000000000) {
+        return 1;
+    }
 
     // no point continuing if there are no devices connected
     if (numberOfDevices == 0) {
@@ -464,29 +375,36 @@ time_t TR_report_data(void)
         char post_data[80 * numberOfDevices];
         char * buf = post_data;
         for(int i=0;i<numberOfDevices; i++){
-            buf += sprintf(buf, "%s,t=%s value=%f %ld000000000\n", sensorAddrs[i]->getType(), sensorAddrs[i]->getName().c_str(),sensorAddrs[i]->getReading(),now); 
+            // only submit if name has been provided
+            if (sensorAddrs[i]->getAddr() != sensorAddrs[i]->getName()) {
+                buf += sprintf(buf, "%s,t=%s value=%f %ld000000000\n", sensorAddrs[i]->getType(), sensorAddrs[i]->getName().c_str(),sensorAddrs[i]->getReading(),now); 
+            }
         }
         // time to report temperatures
         if (next_report == 0) {
             next_report = now;
         }
-        next_report = next_report + INTERVAL_REPORT;
-        WiFiClient client;
-        HTTPClient http;
+        next_report = next_report + interval_report;
+        
+        // only submit if there are readings to submit
+        if (buf != post_data) {
+            WiFiClient client;
+            HTTPClient http;
 
-        // curl -H "Authorization: Token xxx==" -i -XPOST "${influx}${db}" --data-binary @-
-        // Your Domain name with URL path or IP address with path
-        http.begin(client, serverName);
-        // Specify content-type header
-        http.addHeader("Authorization", authtoken);
-        // Send HTTP POST request
-        int httpResponseCode = http.POST(post_data);
-        // Free resources
-        http.end();
+            // curl -H "Authorization: Token xxx==" -i -XPOST "${influx}${db}" --data-binary @-
+            // Your Domain name with URL path or IP address with path
+            http.begin(client, serverName);
+            // Specify content-type header
+            http.addHeader("Authorization", authtoken);
+            // Send HTTP POST request
+            int httpResponseCode = http.POST(post_data);
+            // Free resources
+            http.end();
+        }
     }
 
     // report time to next sample
-    return INTERVAL_SAMPLE+now-time(NULL);
+    return interval_sample+now-time(NULL);
 }
 
 static void add_sensor(mysensor * s) {
@@ -494,7 +412,7 @@ static void add_sensor(mysensor * s) {
     char msgbuf[80];
     sprintf(msgbuf,"Device %d address %s %s", numberOfDevices, s->getAddr().c_str(),s->getName().c_str());
     Serial.println(msgbuf);
-    syslog.logf(msgbuf);
+    syslogf(msgbuf);
     ++numberOfDevices;
 }
 
@@ -515,7 +433,10 @@ void TR_init(AsyncWebServer & server){
     char msgbuf[80];
     int pin = -1;
 
-    pin = prefs.getInt("ds18b20.pin",-1);
+    interval_sample = MyCfgGetInt("temprep","poll",INTERVAL_SAMPLE);
+    interval_report = MyCfgGetInt("temprep","submit",INTERVAL_REPORT);
+
+    pin = MyCfgGetInt("pin","ds18b20",-1);
     if (pin != -1) {
         sensors = new DallasTemperature(new OneWire(pin));
 
@@ -529,7 +450,7 @@ void TR_init(AsyncWebServer & server){
         // locate devices on the bus
         sprintf(msgbuf,"Started with %d devices",n);
         Serial.println(msgbuf);
-        syslog.logf(msgbuf);
+        syslogf(msgbuf);
 
         // Loop through each device, print out address
         for(int i=0;i<n; i++){
@@ -540,12 +461,12 @@ void TR_init(AsyncWebServer & server){
             } else {
                 sprintf(msgbuf,"Ghost device at %d", i);
                 Serial.println(msgbuf);
-                syslog.logf(msgbuf);
+                syslogf(msgbuf);
             }
         }
     }
 
-    pin = prefs.getInt("dht11.pin",-1);
+    pin = MyCfgGetInt("pin","dht11",-1);
     if (pin != -1) {
 #ifdef ADAFRUIT_DHT11
         dht11 = new DHT(pin, DHT11);
@@ -558,16 +479,19 @@ void TR_init(AsyncWebServer & server){
     }
 
     if (numberOfDevices == 0) {
-        syslog.logf("No sensors found, are pins defined?");
+        syslogf("No sensors found, are pins defined?");
     }
     // only create readers once we are ready
 
     // Route for root / web page
     server.on("/temperatures", HTTP_GET, serve_root_get);
     server.on("/api", HTTP_GET, serve_sensor_get);
-    server.on("/remap", HTTP_GET, serve_remap_get);
     server.on("/fake", HTTP_GET, serve_sensor_fake);
-    server.on("/pin", HTTP_GET, serve_pin_get);
+
+    // register our config change handlers
+    MyCfgRegisterInt("pin",&handleConfigPin);
+    MyCfgRegisterString("remap",&handleConfigRemap);
+    MyCfgRegisterInt("temprep",&handleInterval);
 
 #ifndef ESP8266
     // temperature logging
