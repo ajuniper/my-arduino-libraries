@@ -4,6 +4,7 @@
 #endif
 #include <mywebserver.h>
 #include <mysyslog.h>
+#include <mywifi.h>
 
 #ifdef ESP8266
 #define UPDATE_ERROR Update.getErrorString()
@@ -42,45 +43,50 @@ static void serve_update_post(AsyncWebServerRequest *request){
         m+="badly: ";
         m+=UPDATE_ERROR;
     }
-    syslog.logf(LOG_DAEMON|LOG_ERR,m.c_str());
+    syslogf(LOG_DAEMON|LOG_ERR,m.c_str());
     serve_update_page(request, m, true);
 }
 
 static void serve_update_post_body(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
     if(!index){
         Serial.printf("Update Start: %s\n", filename.c_str());
-        syslog.logf(LOG_DAEMON|LOG_INFO,"Update Start: %s", filename.c_str());
+        syslogf(LOG_DAEMON|LOG_INFO,"Update Start: %s", filename.c_str());
 #ifdef ESP8266
+        Update.runAsync(true);
         if(!Update.begin(ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)
 #else
         if(!Update.begin())
 #endif
         {
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
+            syslogf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
     if(!Update.hasError()){
         if(Update.write(data, len) != len){
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
+            syslogf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
     if(final){
         if(Update.end(true)){
             Serial.printf("Update Success: %uB\n", index+len);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update success");
+            syslogf(LOG_DAEMON|LOG_INFO,"Update success");
         } else {
             Update.printError(Serial);
-            syslog.logf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
+            syslogf(LOG_DAEMON|LOG_INFO,"Update failed: %s",UPDATE_ERROR);
         }
     }
 }
 
 static void serve_reboot_get(AsyncWebServerRequest *request) {
-    request->send(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Rebooting... bye bye...</body></html>");
-    syslog.logf(LOG_DAEMON|LOG_CRIT,"Restarting");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Rebooting... bye bye...</body></html>");
+    response->addHeader("Connection", "close");
+    // TODO how to defer the restart until the response has been sent?
+    request->send(response);
+    syslogf(LOG_DAEMON|LOG_CRIT,"Restarting");
     Serial.printf("Restarting");
+    WIFI_going_for_reboot();
     delay(1000);
     ESP.restart();
 }
