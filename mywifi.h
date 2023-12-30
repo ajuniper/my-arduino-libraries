@@ -5,3 +5,4 @@
 #include <WiFi.h>
 #endif
 extern void WIFI_init(const char * hostname = NULL, bool wait_for_wifi = false);
+extern void WIFI_going_for_reboot();

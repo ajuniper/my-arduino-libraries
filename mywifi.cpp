@@ -3,6 +3,45 @@
 #include <my_secrets.h>
 #include <mywifi.h>
 #include <mysyslog.h>
+#include <myconfig.h>
+#include <Ticker.h>
+
+/*
+Config nodes:
+        wifi.hostname
+        wifi.ssid
+        wifi.password
+*/
+
+static int disconnecttime = 0;
+static bool going_for_reboot = false;
+
+// called from ticker handler and not interrupt thread
+static void wifi_connected() {
+    if (disconnecttime != 0) {
+        syslogf("Wifi connected again after %d seconds", time(NULL) - disconnecttime);
+        disconnecttime = 0;
+    } else {
+        // at boot there will have been no prior disconnect
+        // Init and get the time
+        Serial.println(WiFi.localIP());
+        syslogf(LOG_DAEMON | LOG_WARNING, "started");
+    }
+}
+static void wifi_disconnected() {
+    // do not try reconnecting if rebooting
+    if (going_for_reboot == true) { return; }
+
+    Serial.println("WiFi lost connection");
+    if (disconnecttime == 0) {
+        disconnecttime = time(NULL);
+    }
+    WiFi.reconnect();
+}
+
+// must use tickers because not allowed to do anything in callback
+Ticker wifi_connected_ticker;
+Ticker wifi_disconnected_ticker;
 
 #ifdef ESP8266
 WiFiEventHandler wifiConnectHandler;
@@ -11,23 +50,12 @@ WiFiEventHandler wifiDisconnectHandler;
 
 #endif
 
-static const char* ssid     = MY_WIFI_SSID;
-static const char* password = MY_WIFI_PASSWORD;
-
-static int disconnecttime = 0;
-
 #ifdef ESP8266
 static void WiFiStationDisconnected(const WiFiEventStationModeDisconnected& event){
-    Serial.println("WiFi lost connection");
 #else
 static void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
-    Serial.print("WiFi lost connection. Reason: ");
-    Serial.println(info.wifi_sta_disconnected.reason);
 #endif
-    if (disconnecttime == 0) {
-        disconnecttime = time(NULL);
-    }
-    WiFi.reconnect();
+    wifi_disconnected_ticker.once_ms_scheduled(0,wifi_disconnected);
 }
 
 #ifdef ESP8266
@@ -35,24 +63,33 @@ static void WiFiGotIP(const WiFiEventStationModeGotIP& event){
 #else
 static void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info){
 #endif
-    if (disconnecttime != 0) {
-        syslog.logf("Wifi connected again after %d seconds", time(NULL) - disconnecttime);
-        disconnecttime = 0;
+    wifi_connected_ticker.once_ms_scheduled(0,wifi_connected);
+}
+
+static const char * handleConfig(const char * name, const String & id, String &value) {
+    // TODO reconfigure with new values
+    if (id == "hostname") {
+        // all ok, save the value
+        return NULL;
+    } else if (id == "ssid") {
+        // all ok, save the value
+        return NULL;
+    } else if (id == "password") {
+        // all ok, save the value
+        return NULL;
     } else {
-        // at boot there will have been no prior disconnect
-        // Init and get the time
-        Serial.println(WiFi.localIP());
-        //configTime(0, 0, MY_NTP_SERVER1, MY_NTP_SERVER2, MY_NTP_SERVER3);
-        syslog.logf(LOG_DAEMON | LOG_WARNING, "started");
+        return "config type not recognised";
     }
 }
 
 void WIFI_init(const char * hostname, bool wait_for_wifi) {
-    Serial.print("Connecting");
-    if (hostname && *hostname) {
-        WiFi.setHostname(hostname);
+    String h = MyCfgGetString("wifi","hostname",String(hostname?hostname:""));
+    if (h.length() > 0) {
+        WiFi.setHostname(h.c_str());
     }
-    WiFi.begin(ssid, password);
+    String ssid = MyCfgGetString("wifi","ssid",MY_WIFI_SSID);
+    String password = MyCfgGetString("wifi","password",MY_WIFI_PASSWORD);
+    WiFi.begin(ssid.c_str(), password.c_str());
 #ifdef ESP8266
     wifiConnectHandler = WiFi.onStationModeGotIP(WiFiGotIP);
     wifiDisconnectHandler = WiFi.onStationModeDisconnected(WiFiStationDisconnected);
@@ -60,11 +97,17 @@ void WIFI_init(const char * hostname, bool wait_for_wifi) {
     WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
 #endif
+    MyCfgRegisterString("wifi",&handleConfig);
     if (wait_for_wifi) {
+        Serial.print("Connecting");
         while (WiFi.status() != WL_CONNECTED) {
             delay(500);
             Serial.print(".");
         }
     }
+    Serial.println(WiFi.localIP());
+}
 
+void WIFI_going_for_reboot() {
+    going_for_reboot = true;
 }
