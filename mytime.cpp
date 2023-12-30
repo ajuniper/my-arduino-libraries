@@ -43,22 +43,25 @@ void mytime_setup(const char * tz, int pin_clk, int pin_data, int pin_rst)
     setenv("TZ", tz, 1);
     tzset();
 
-    // create RTC object
-    rtc = new ErriezDS1302(pin_clk, pin_data, pin_rst);
+    if (pin_clk > -1) {
+        // create RTC object
+        rtc = new ErriezDS1302(pin_clk, pin_data, pin_rst);
 
-    // Initialize I2C
-    Wire.begin();
-    Wire.setClock(100000);
+        // Initialize I2C
+        Wire.begin();
+        Wire.setClock(100000);
 
-    // Initialize RTC
-    int i = 0;
-    while (i++ < 3) {
-        if (rtc->begin()) {
-            have_rtc = true;
-            break;
+        // Initialize RTC
+        int i = 0;
+        while (i++ < 3) {
+            if (rtc->begin()) {
+                have_rtc = true;
+                break;
+            }
+            delay(1000);
         }
-        delay(1000);
     }
+
     if (have_rtc == false) {
         Serial.println("No RTC!");
     } else {
