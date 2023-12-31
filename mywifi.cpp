@@ -6,6 +6,11 @@
 #include <myconfig.h>
 #include <Ticker.h>
 
+#ifndef ESP8266
+// ESP32 does not have a separate scheduler queue
+#define once_ms_scheduled once_ms
+#endif
+
 /*
 Config nodes:
         wifi.hostname
