@@ -158,7 +158,7 @@ static const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <title>Temperature Sensors</title>
-  <meta http-equiv="refresh" content="60">
+  <meta http-equiv="refresh" content="%REFRESHTIME%">
 </head>
 <body>
   <h1>Temperature Sensors at %TIMENOW%</h1>
@@ -205,6 +205,8 @@ static String processor(const String& var){
         char dt[dt_len];
         ssize_t l = strftime(dt,dt_len,"%F %T",&timeinfo);
         return String(dt);
+    } else if (var == "REFRESHTIME") {
+        return String(interval_sample);
     }
     return String();
 }
@@ -348,7 +350,7 @@ time_t TR_report_data(void)
 
     // no point continuing if there are no devices connected
     if (numberOfDevices == 0) {
-        return 10;
+        return 60;
     }
 
     // called back too early, tell the caller to wait again
@@ -404,15 +406,22 @@ time_t TR_report_data(void)
     }
 
     // report time to next sample
-    return interval_sample+now-time(NULL);
+    // if interval sample < 0 then use interval_report
+    if (interval_sample < 1) {
+        return interval_report+now;
+    } else {
+        return interval_sample+now;
+    }
 }
 
-static void add_sensor(mysensor * s) {
+static void add_sensor(mysensor * s, bool isColdBoot) {
     sensorAddrs[numberOfDevices] = s;
     char msgbuf[80];
     sprintf(msgbuf,"Device %d address %s %s", numberOfDevices, s->getAddr().c_str(),s->getName().c_str());
     Serial.println(msgbuf);
-    syslogf(msgbuf);
+    if (isColdBoot) {
+        syslogf(msgbuf);
+    }
     ++numberOfDevices;
 }
 
@@ -421,15 +430,15 @@ static void TR_reporting_task(void *)
 {
     while (1) {
         time_t next = TR_report_data();
-        time_t now = time(NULL);
-        if (next > now) {
-            delay((next - now)*1000);
+        time_t delaay = next - time(NULL);
+        if (delaay > 0) {
+            delay(delaay*1000);
         }
     }
 }
 #endif
 
-void TR_init(AsyncWebServer & server){
+void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
     char msgbuf[80];
     int pin = -1;
 
@@ -450,14 +459,16 @@ void TR_init(AsyncWebServer & server){
         // locate devices on the bus
         sprintf(msgbuf,"Started with %d devices",n);
         Serial.println(msgbuf);
-        syslogf(msgbuf);
+        if (isColdBoot) {
+            syslogf(msgbuf);
+        }
 
         // Loop through each device, print out address
         for(int i=0;i<n; i++){
             DeviceAddress da;
             // Search the wire for address
             if(sensors->getAddress(da, i)){
-                add_sensor(new mysensor_ds18b20(sensors, da));
+                add_sensor(new mysensor_ds18b20(sensors, da), isColdBoot);
             } else {
                 sprintf(msgbuf,"Ghost device at %d", i);
                 Serial.println(msgbuf);
@@ -474,8 +485,8 @@ void TR_init(AsyncWebServer & server){
 #else
         dht11 = new DHT11(pin);
 #endif
-        add_sensor(new mysensor_dht11_temp(pin, dht11));
-        add_sensor(new mysensor_dht11_humidity(pin, dht11));
+        add_sensor(new mysensor_dht11_temp(pin, dht11), isColdBoot);
+        add_sensor(new mysensor_dht11_humidity(pin, dht11), isColdBoot);
     }
 
     if (numberOfDevices == 0) {
@@ -494,8 +505,12 @@ void TR_init(AsyncWebServer & server){
     MyCfgRegisterInt("temprep",&handleInterval);
 
 #ifndef ESP8266
-    // temperature logging
-    xTaskCreate(TR_reporting_task, "TR", 10000, NULL, 1, NULL);
+    // ESP8266 must always run in loop
+    // TODO use ticker for ESP8266
+    if (!run_in_loop) {
+        // temperature logging
+        xTaskCreate(TR_reporting_task, "TR", 10000, NULL, 1, NULL);
+    }
 #endif
 }
 
