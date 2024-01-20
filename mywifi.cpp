@@ -20,6 +20,7 @@ Config nodes:
 
 static int disconnecttime = 0;
 static bool going_for_reboot = false;
+static bool wifiColdBoot = true;
 
 // called from ticker handler and not interrupt thread
 static void wifi_connected() {
@@ -30,7 +31,9 @@ static void wifi_connected() {
         // at boot there will have been no prior disconnect
         // Init and get the time
         Serial.println(WiFi.localIP());
-        syslogf(LOG_DAEMON | LOG_WARNING, "started");
+        if (wifiColdBoot) {
+            syslogf(LOG_DAEMON | LOG_WARNING, "started");
+        }
     }
 }
 static void wifi_disconnected() {
@@ -87,7 +90,8 @@ static const char * handleConfig(const char * name, const String & id, String &v
     }
 }
 
-void WIFI_init(const char * hostname, bool wait_for_wifi) {
+void WIFI_init(const char * hostname, bool wait_for_wifi, bool isColdBoot) {
+    wifiColdBoot = isColdBoot;
     String h = MyCfgGetString("wifi","hostname",String(hostname?hostname:""));
     if (h.length() > 0) {
         WiFi.setHostname(h.c_str());
