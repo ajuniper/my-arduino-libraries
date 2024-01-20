@@ -6,10 +6,27 @@
 #include <Preferences.h>
 #include <map>
 #include <mysyslog.h>
+#include <mywifi.h>
+
 Preferences prefs;
 
 std::map<String, MyCfgCbInt> config_int;
+std::map<String, MyCfgCbFloat> config_float;
 std::map<String, MyCfgCbString> config_string;
+
+static void serve_config_clear(AsyncWebServerRequest * request) {
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Config cleared; rebooting... bye bye...</body></html>");
+    response->addHeader("Connection", "close");
+    // TODO how to defer the restart until the response has been sent?
+    request->send(response);
+    prefs.clear();
+    prefs.end();
+    syslogf(LOG_DAEMON|LOG_CRIT,"Config clear, restarting");
+    Serial.printf("Config cleared, restarting");
+    WIFI_going_for_reboot();
+    delay(1000);
+    ESP.restart();
+}
 
 static void serve_config_get(AsyncWebServerRequest * request) {
     String x,y;
@@ -43,6 +60,31 @@ static void serve_config_get(AsyncWebServerRequest * request) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
                         syslogf("Set %s to %d",x,z);
+                        response = request->beginResponse(200, "text/plain", String(z));
+                    }
+                } else {
+                    response = request->beginResponse(400, "text/plain", e);
+                }
+            }
+        } else if (config_float.find(x) != config_float.end()) {
+            if (!request->hasParam("value")) {
+                // respond with current value
+                x += "." + y;
+                if (prefs.getBytesLength(x.c_str()) > 0) {
+                    response = request->beginResponse(200, "text/plain", String(prefs.getFloat(x.c_str(),0)));
+                } else {
+                    response = request->beginResponse(404, "text/plain", "not set");
+                }
+            } else {
+                // set new int value
+                float z = request->getParam("value")->value().toFloat();
+                const char * e = (config_float.find(x)->second)(x.c_str(),y,z);
+                if (e == NULL) {
+                    x += "." + y;
+                    if (prefs.putInt(x.c_str(),z) != 4) {
+                        response = request->beginResponse(500, "text/plain", "failed to save preference");
+                    } else {
+                        syslogf("Set %s to %f",x,z);
                         response = request->beginResponse(200, "text/plain", String(z));
                     }
                 } else {
@@ -88,6 +130,10 @@ void MyCfgRegisterInt(const char * name, MyCfgCbInt cb) {
     config_int[name] = cb;
 }
 
+void MyCfgRegisterFloat(const char * name, MyCfgCbFloat cb) {
+    config_float[name] = cb;
+}
+
 void MyCfgRegisterString(const char * name, MyCfgCbString cb) {
     config_string[name] = cb;
 }
@@ -95,12 +141,18 @@ void MyCfgRegisterString(const char * name, MyCfgCbString cb) {
 void MyCfgInit(const char * ns) {
     prefs.begin(ns, false);
     server.on("/config", HTTP_GET, serve_config_get);
+    server.on("/configreset", HTTP_GET, serve_config_clear);
 }
 
 int MyCfgGetInt(const char * name, const String & id, int def) {
     String i = name;
     i += "." + id;
     return prefs.getInt(i.c_str(),def);
+}
+int MyCfgGetFloat(const char * name, const String & id, float def) {
+    String i = name;
+    i += "." + id;
+    return prefs.getFloat(i.c_str(),def);
 }
 String MyCfgGetString(const char * name, const String & id, const String & def) {
     String i = name;
@@ -111,6 +163,15 @@ bool MyCfgPutInt(const char * name, const String & id, int value) {
     String i = name;
     i += "." + id;
     if (prefs.putInt(i.c_str(),value) != 4) {
+        return false;
+    } else {
+        return true;
+    }
+}
+bool MyCfgPutFloat(const char * name, const String & id, float value) {
+    String i = name;
+    i += "." + id;
+    if (prefs.putFloat(i.c_str(),value) != 4) {
         return false;
     } else {
         return true;

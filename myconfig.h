@@ -19,16 +19,20 @@ extern void MyCfgInit(const char * ns = "myconfig");
 // callback types for setting int and string
 // return is either NULL for OK or error message to return
 typedef const char * (*MyCfgCbInt)(const char * name, const String & id, int &value);
+typedef const char * (*MyCfgCbFloat)(const char * name, const String & id, float &value);
 typedef const char * (*MyCfgCbString)(const char * name, const String & id, String &value);
 
 // register interest in a config set of "name"
 extern void MyCfgRegisterInt(const char * name, MyCfgCbInt cb);
+extern void MyCfgRegisterFloat(const char * name, MyCfgCbFloat cb);
 extern void MyCfgRegisterString(const char * name, MyCfgCbString cb);
 
 // retrieve a config value of "id" inside "name"
 extern int MyCfgGetInt(const char * name, const String & id, int def);
+extern int MyCfgGetFloat(const char * name, const String & id, float def);
 extern String MyCfgGetString(const char * name, const String & id, const String & def);
 
 // set a config value of "id" inside "name"
 extern bool MyCfgPutInt(const char * name, const String & id, int value);
+extern bool MyCfgPutFloat(const char * name, const String & id, float value);
 extern bool MyCfgPutString(const char * name, const String & id, const String & value);
