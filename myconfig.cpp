@@ -13,6 +13,7 @@ Preferences prefs;
 std::map<String, MyCfgCbInt> config_int;
 std::map<String, MyCfgCbFloat> config_float;
 std::map<String, MyCfgCbString> config_string;
+bool redirectToRoot = false;
 
 static void serve_config_clear(AsyncWebServerRequest * request) {
     AsyncWebServerResponse *response = request->beginResponse(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Config cleared; rebooting... bye bye...</body></html>");
@@ -31,6 +32,7 @@ static void serve_config_clear(AsyncWebServerRequest * request) {
 static void serve_config_get(AsyncWebServerRequest * request) {
     String x,y;
     AsyncWebServerResponse *response = nullptr;
+    String respStr;
     // GET /config?name=XX&id=YY
     // GET /config?name=XX&id=YY&value=ZZ
     if (!request->hasParam("name")) {
@@ -60,7 +62,7 @@ static void serve_config_get(AsyncWebServerRequest * request) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
                         syslogf("Set %s to %d",x,z);
-                        response = request->beginResponse(200, "text/plain", String(z));
+                        respStr = String(z);
                     }
                 } else {
                     response = request->beginResponse(400, "text/plain", e);
@@ -85,7 +87,7 @@ static void serve_config_get(AsyncWebServerRequest * request) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
                         syslogf("Set %s to %f",x,z);
-                        response = request->beginResponse(200, "text/plain", String(z));
+                        respStr = String(z);
                     }
                 } else {
                     response = request->beginResponse(400, "text/plain", e);
@@ -111,7 +113,7 @@ static void serve_config_get(AsyncWebServerRequest * request) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
                         syslogf("Set %s to %d",x,z);
-                        response = request->beginResponse(200, "text/plain", z.c_str());
+                        respStr = z;
                     }
                 } else {
                     response = request->beginResponse(400, "text/plain", e);
@@ -120,6 +122,13 @@ static void serve_config_get(AsyncWebServerRequest * request) {
 
         } else {
             response = request->beginResponse(400, "text/plain", "Config name not found");
+        }
+    }
+    if (response == nullptr) {
+        if (redirectToRoot) {
+            response = redirect_to_root(request);
+        } else {
+            response = request->beginResponse(200, "text/plain", respStr.c_str());
         }
     }
     response->addHeader("Connection", "close");
@@ -138,7 +147,8 @@ void MyCfgRegisterString(const char * name, MyCfgCbString cb) {
     config_string[name] = cb;
 }
 
-void MyCfgInit(const char * ns) {
+void MyCfgInit(bool _redirectToRoot, const char * ns) {
+    redirectToRoot = _redirectToRoot;
     prefs.begin(ns, false);
     server.on("/config", HTTP_GET, serve_config_get);
     server.on("/configreset", HTTP_GET, serve_config_clear);

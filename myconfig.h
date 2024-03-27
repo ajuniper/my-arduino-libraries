@@ -14,7 +14,8 @@ saves in prefs as XX.YY
 */
 
 // must be called first
-extern void MyCfgInit(const char * ns = "myconfig");
+// if bool is true then redirect back to root page after set
+extern void MyCfgInit(bool redirectToRoot=false, const char * ns = "myconfig");
 
 // callback types for setting int and string
 // return is either NULL for OK or error message to return
