@@ -30,7 +30,7 @@ extern void MyCfgRegisterString(const char * name, MyCfgCbString cb);
 
 // retrieve a config value of "id" inside "name"
 extern int MyCfgGetInt(const char * name, const String & id, int def);
-extern int MyCfgGetFloat(const char * name, const String & id, float def);
+extern float MyCfgGetFloat(const char * name, const String & id, float def);
 extern String MyCfgGetString(const char * name, const String & id, const String & def);
 
 // set a config value of "id" inside "name"

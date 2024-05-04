@@ -15,6 +15,31 @@ std::map<String, MyCfgCbFloat> config_float;
 std::map<String, MyCfgCbString> config_string;
 bool redirectToRoot = false;
 
+#ifdef ESP32
+// https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/storage/nvs_flash.html
+#include "nvs.h"
+#include "nvs_flash.h"
+static void serve_config_list(AsyncWebServerRequest * request) {
+    String ls;
+    nvs_iterator_t it = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY);
+    while(it != NULL) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        ls += info.namespace_name;
+        ls += "/";
+        ls += info.key;
+        ls += " (";
+        ls += String(info.type);
+        ls += ")\n";
+        // TODO print content size
+        it = nvs_entry_next(it);
+    }
+    nvs_release_iterator(it);
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", ls);
+    request->send(response);
+}
+#endif
+
 static void serve_config_clear(AsyncWebServerRequest * request) {
     AsyncWebServerResponse *response = request->beginResponse(200, "text/html", "<html><head><meta http-equiv=\"refresh\" content=\"10; url=/\"></head><body>Config cleared; rebooting... bye bye...</body></html>");
     response->addHeader("Connection", "close");
@@ -47,10 +72,11 @@ static void serve_config_get(AsyncWebServerRequest * request) {
             if (!request->hasParam("value")) {
                 // respond with current value
                 x += "." + y;
-                if (prefs.getBytesLength(x.c_str()) > 0) {
+                if (prefs.isKey(x.c_str())) {
                     response = request->beginResponse(200, "text/plain", String(prefs.getInt(x.c_str(),0)));
                 } else {
-                    response = request->beginResponse(404, "text/plain", "not set");
+                    x = x + " not set";
+                    response = request->beginResponse(404, "text/plain", x.c_str());
                 }
             } else {
                 // set new int value
@@ -72,18 +98,19 @@ static void serve_config_get(AsyncWebServerRequest * request) {
             if (!request->hasParam("value")) {
                 // respond with current value
                 x += "." + y;
-                if (prefs.getBytesLength(x.c_str()) > 0) {
+                if (prefs.isKey(x.c_str())) {
                     response = request->beginResponse(200, "text/plain", String(prefs.getFloat(x.c_str(),0)));
                 } else {
-                    response = request->beginResponse(404, "text/plain", "not set");
+                    x = x + " not set";
+                    response = request->beginResponse(404, "text/plain", x.c_str());
                 }
             } else {
-                // set new int value
+                // set new float value
                 float z = request->getParam("value")->value().toFloat();
                 const char * e = (config_float.find(x)->second)(x.c_str(),y,z);
                 if (e == NULL) {
                     x += "." + y;
-                    if (prefs.putInt(x.c_str(),z) != 4) {
+                    if (prefs.putFloat(x.c_str(),z) != 4) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
                         syslogf("Set %s to %f",x,z);
@@ -98,10 +125,11 @@ static void serve_config_get(AsyncWebServerRequest * request) {
             if (!request->hasParam("value")) {
                 // respond with current value
                 x += "." + y;
-                if (prefs.getBytesLength(x.c_str()) > 0) {
+                if (prefs.isKey(x.c_str())) {
                     response = request->beginResponse(200, "text/plain", prefs.getString(x.c_str()));
                 } else {
-                    response = request->beginResponse(404, "text/plain", "not set");
+                    x = x + " not set";
+                    response = request->beginResponse(404, "text/plain", x.c_str());
                 }
             } else {
                 // set new string value
@@ -126,7 +154,7 @@ static void serve_config_get(AsyncWebServerRequest * request) {
     }
     if (response == nullptr) {
         if (redirectToRoot) {
-            response = redirect_to_root(request);
+            response = redirect_to_root(request, respStr.c_str());
         } else {
             response = request->beginResponse(200, "text/plain", respStr.c_str());
         }
@@ -149,9 +177,15 @@ void MyCfgRegisterString(const char * name, MyCfgCbString cb) {
 
 void MyCfgInit(bool _redirectToRoot, const char * ns) {
     redirectToRoot = _redirectToRoot;
-    prefs.begin(ns, false);
+    Serial.printf("Starting config in namespace \"%s\"\n",ns?ns:"none");
+    if (prefs.begin(ns, false) == false) {
+        Serial.println("Failed to begin preferences library!");
+    }
     server.on("/config", HTTP_GET, serve_config_get);
     server.on("/configreset", HTTP_GET, serve_config_clear);
+#ifdef ESP32
+    server.on("/configlist", HTTP_GET, serve_config_list);
+#endif
 }
 
 int MyCfgGetInt(const char * name, const String & id, int def) {
@@ -159,7 +193,7 @@ int MyCfgGetInt(const char * name, const String & id, int def) {
     i += "." + id;
     return prefs.getInt(i.c_str(),def);
 }
-int MyCfgGetFloat(const char * name, const String & id, float def) {
+float MyCfgGetFloat(const char * name, const String & id, float def) {
     String i = name;
     i += "." + id;
     return prefs.getFloat(i.c_str(),def);
@@ -173,6 +207,7 @@ bool MyCfgPutInt(const char * name, const String & id, int value) {
     String i = name;
     i += "." + id;
     if (prefs.putInt(i.c_str(),value) != 4) {
+        syslogf(LOG_DAEMON|LOG_CRIT,"Config save %s failed",i.c_str());
         return false;
     } else {
         return true;
@@ -182,6 +217,7 @@ bool MyCfgPutFloat(const char * name, const String & id, float value) {
     String i = name;
     i += "." + id;
     if (prefs.putFloat(i.c_str(),value) != 4) {
+        syslogf(LOG_DAEMON|LOG_CRIT,"Config save %s failed",i.c_str());
         return false;
     } else {
         return true;
@@ -191,6 +227,7 @@ bool MyCfgPutString(const char * name, const String & id, const String & value) 
     String i = name;
     i += "." + id;
     if (prefs.putString(i.c_str(),value) != value.length()) {
+        syslogf(LOG_DAEMON|LOG_CRIT,"Config save %s failed",i.c_str());
         return false;
     } else {
         return true;
