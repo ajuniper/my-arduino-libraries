@@ -9,8 +9,8 @@ AsyncWebServer server(80);
 
 static const char * default_page = NULL;
 
-AsyncWebServerResponse * redirect_to_root(AsyncWebServerRequest * request) {
-  AsyncWebServerResponse *response = request->beginResponse(302, "text/plain", "OK");
+AsyncWebServerResponse * redirect_to_root(AsyncWebServerRequest * request, const char *b) {
+  AsyncWebServerResponse *response = request->beginResponse(302, "text/plain", b);
   response->addHeader("Location",default_page);
   return(response);
 }
