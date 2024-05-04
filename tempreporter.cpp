@@ -29,6 +29,7 @@ Config nodes:
         pin.[ds18b20|dht11] = number
         temprep.poll = seconds
         temprep.submit = seconds
+        tr-enable.NAMEORADDR = 0/1
 */
 // how frequently we take readings
 #define INTERVAL_SAMPLE 5
@@ -44,11 +45,11 @@ static const char* authtoken = MY_INFLUX_AUTHTOKEN;
 class mysensor {
     public:
         mysensor(const char * t="temperature") :
-            lastReading(0.0), type(t) {
+            lastReading(0.0), type(t), enable(true) {
             // no address known at this time
         };
         mysensor(String &a, const char * t="temperature") :
-            lastReading(0.0), type(t) {
+            lastReading(0.0), type(t), enable(true) {
             setAddr(a.c_str());
         };
         virtual ~mysensor() {};
@@ -58,6 +59,8 @@ class mysensor {
         const char * getType() const { return type; }
         virtual void updateReading() = 0;
         void setName(const String & s) { str = s; }
+        void setEnable(bool e) { enable = e; }
+        bool getEnable() const { return enable; }
     protected:
         float lastReading;
         void setAddr(const char *a) {
@@ -74,6 +77,8 @@ class mysensor {
         String realAddress;
         // last read value
         const char * type;
+        // is reporting enabled for this channel?
+        bool enable;
 };
 class mysensor_ds18b20 : public mysensor {
     public:
@@ -211,6 +216,21 @@ static String processor(const String& var){
     return String();
 }
 
+static void add_sensor(mysensor * s, bool isColdBoot) {
+    sensorAddrs[numberOfDevices] = s;
+    char msgbuf[80];
+    sprintf(msgbuf,"Device %d address %s %s", numberOfDevices, s->getAddr().c_str(),s->getName().c_str());
+    Serial.println(msgbuf);
+    if (isColdBoot) {
+        syslogf(msgbuf);
+    }
+    ++numberOfDevices;
+    // set the enable flag
+    // prefer config based on name but use based on addr if no name config
+    // default to true
+    s->setEnable(MyCfgGetInt("tr",s->getName(),MyCfgGetInt("tr",s->getAddr(),true)));
+}
+
 static const char * handleInterval(const char * name, const String & id, int &value) {
     if (id == "poll") {
         // all ok, save the value
@@ -223,6 +243,25 @@ static const char * handleInterval(const char * name, const String & id, int &va
     } else {
         return "interval type not recognised";
     }
+}
+
+static const char * handleEnable(const char * name, const String & id, int &value) {
+    int i;
+    String x = id;
+    // we only consider real sensors in this loop
+    for(i=0; i<numberOfDevices; ++i) {
+        // is this the sensor we are looking for?
+        if ((x == sensorAddrs[i]->getName()) ||
+            (x == sensorAddrs[i]->getAddr())) {
+            // found the sensor, save the remap
+            sensorAddrs[i]->setEnable(value);
+            return NULL;
+        }
+    }
+
+    // if we didn't find an existing sensor then let it be saved anyway
+    // as the sensor may appear later
+    return NULL;
 }
 
 static const char * handleConfigPin(const char * name, const String & id, int &value) {
@@ -306,10 +345,11 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
             temp = atof(x.c_str());
             x = request->getParam("id")->value();
             mysensor_fake * f = NULL;
-            for (i=numberOfDevices; i<max_sensors; ++i) {
+            for (i=0; i<max_sensors; ++i) {
                 if (sensorAddrs[i] == NULL) {
                     // found empty slot
                     f = new mysensor_fake(x);
+                    add_sensor(f,true);
                 } else if (!(sensorAddrs[i]->getAddr().isEmpty())) {
                     // fakes do not have an address
                     continue;
@@ -378,7 +418,8 @@ time_t TR_report_data(void)
         char * buf = post_data;
         for(int i=0;i<numberOfDevices; i++){
             // only submit if name has been provided
-            if (sensorAddrs[i]->getAddr() != sensorAddrs[i]->getName()) {
+            if ((sensorAddrs[i]->getEnable()) &&
+                (sensorAddrs[i]->getAddr() != sensorAddrs[i]->getName())) {
                 buf += sprintf(buf, "%s,t=%s value=%f %ld000000000\n", sensorAddrs[i]->getType(), sensorAddrs[i]->getName().c_str(),sensorAddrs[i]->getReading(),now); 
             }
         }
@@ -412,17 +453,6 @@ time_t TR_report_data(void)
     } else {
         return interval_sample+now;
     }
-}
-
-static void add_sensor(mysensor * s, bool isColdBoot) {
-    sensorAddrs[numberOfDevices] = s;
-    char msgbuf[80];
-    sprintf(msgbuf,"Device %d address %s %s", numberOfDevices, s->getAddr().c_str(),s->getName().c_str());
-    Serial.println(msgbuf);
-    if (isColdBoot) {
-        syslogf(msgbuf);
-    }
-    ++numberOfDevices;
 }
 
 #ifndef ESP8266
@@ -503,6 +533,7 @@ void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
     MyCfgRegisterInt("pin",&handleConfigPin);
     MyCfgRegisterString("remap",&handleConfigRemap);
     MyCfgRegisterInt("temprep",&handleInterval);
+    MyCfgRegisterInt("tr",&handleEnable);
 
 #ifndef ESP8266
     // ESP8266 must always run in loop
