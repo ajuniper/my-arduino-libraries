@@ -19,8 +19,8 @@
 
 /*
 Config nodes:
-        forecast.interval (hours)
-        forecast.lookahead (hours)
+        fcst.rate (hours)
+        fcst.ahead (hours)
         weather.url
 */
 
@@ -139,14 +139,14 @@ static void TF_reporting_task(void *)
 #endif
 
 static const char * handleConfigInt(const char * name, const String & id, int &value) {
-    if (id == "interval") {
+    if (id == "rate") {
         // all ok, save the value
         interval_sample = value;
 #ifdef ESP8266
         TF_reporting_ticker.attach(interval_sample, TF_get_forecast);
 #endif
         return NULL;
-    } else if (id == "lookahead") {
+    } else if (id == "ahead") {
         // all ok, save the value
         forecast_lookahead = value;
         return NULL;
@@ -165,8 +165,8 @@ static const char * handleConfigUrl(const char * name, const String & id, String
 }
 
 void TF_init() {
-    interval_sample = MyCfgGetInt("forecast","interval",interval_sample);
-    forecast_lookahead = MyCfgGetInt("forecast","lookahead",forecast_lookahead);
+    interval_sample = MyCfgGetInt("fcst","rate",interval_sample);
+    forecast_lookahead = MyCfgGetInt("fcst","ahead",forecast_lookahead);
     weather_url = MyCfgGetString("weather","url",weather_url);
 
 #ifdef ESP8266
@@ -176,6 +176,6 @@ void TF_init() {
 #endif
 
     // register our config change handlers
-    MyCfgRegisterInt("forecast",&handleConfigInt);
+    MyCfgRegisterInt("fcst",&handleConfigInt);
     MyCfgRegisterString("weather",&handleConfigUrl);
 }
