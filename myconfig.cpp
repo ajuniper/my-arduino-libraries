@@ -140,7 +140,7 @@ static void serve_config_get(AsyncWebServerRequest * request) {
                     if (prefs.putString(x.c_str(),z) != z.length()) {
                         response = request->beginResponse(500, "text/plain", "failed to save preference");
                     } else {
-                        syslogf("Set %s to %d",x,z);
+                        syslogf("Set %s to %s",x,z.c_str());
                         respStr = z;
                     }
                 } else {
@@ -226,8 +226,9 @@ bool MyCfgPutFloat(const char * name, const String & id, float value) {
 bool MyCfgPutString(const char * name, const String & id, const String & value) {
     String i = name;
     i += "." + id;
-    if (prefs.putString(i.c_str(),value) != value.length()) {
-        syslogf(LOG_DAEMON|LOG_CRIT,"Config save %s failed",i.c_str());
+    size_t saved = prefs.putString(i.c_str(),value);
+    if (saved != value.length()) {
+        syslogf(LOG_DAEMON|LOG_CRIT,"Config save %s failed, wrote %u",i.c_str(),saved);
         return false;
     } else {
         return true;
