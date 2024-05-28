@@ -25,11 +25,10 @@
 
 /*
 Config nodes:
-        remap.ADDR = label
-        pin.[ds18b20|dht11] = number
+        remap.N = ADDR label [disable=1] TODO
+        trpin.[18b20|dht11] = number
         temprep.poll = seconds
         temprep.submit = seconds
-        tr-enable.NAMEORADDR = 0/1
 */
 // how frequently we take readings
 #define INTERVAL_SAMPLE 5
@@ -228,7 +227,8 @@ static void add_sensor(mysensor * s, bool isColdBoot) {
     // set the enable flag
     // prefer config based on name but use based on addr if no name config
     // default to true
-    s->setEnable(MyCfgGetInt("tr",s->getName(),MyCfgGetInt("tr",s->getAddr(),true)));
+    // default to true, adjusted when remaps are loaded
+    s->setEnable(true);
 }
 
 static const char * handleInterval(const char * name, const String & id, int &value) {
@@ -245,30 +245,11 @@ static const char * handleInterval(const char * name, const String & id, int &va
     }
 }
 
-static const char * handleEnable(const char * name, const String & id, int &value) {
-    int i;
-    String x = id;
-    // we only consider real sensors in this loop
-    for(i=0; i<numberOfDevices; ++i) {
-        // is this the sensor we are looking for?
-        if ((x == sensorAddrs[i]->getName()) ||
-            (x == sensorAddrs[i]->getAddr())) {
-            // found the sensor, save the remap
-            sensorAddrs[i]->setEnable(value);
-            return NULL;
-        }
-    }
-
-    // if we didn't find an existing sensor then let it be saved anyway
-    // as the sensor may appear later
-    return NULL;
-}
-
 static const char * handleConfigPin(const char * name, const String & id, int &value) {
     if (id == "dht11") {
         // all ok, save the value
         return NULL;
-    } else if (id == "ds18b20") {
+    } else if (id == "18b20") {
         // all ok, save the value
         return NULL;
     } else {
@@ -276,22 +257,75 @@ static const char * handleConfigPin(const char * name, const String & id, int &v
     }
 }
 
-static const char * handleConfigRemap(const char * name, const String & id, String &value) {
+static void loadRemap(String & value) {
     int i;
-    String x = id;
+    // error checking is handled on the way in
+    i = value.indexOf(' ');
+    if (i == -1) {
+        return;
+    }
+    if ((i+1) == value.length()) {
+        return;
+    }
+    String addr = value.substring(0,i);
+    int j = value.indexOf(' ',i+1);
+    bool enable = true;
+    String name;
+    if (j == -1) {
+        // no disable flag
+        name = value.substring(i+1);
+    } else {
+        // do not report sensor value
+        enable = false;
+        name = value.substring(i+1,j);
+    }
+        
     // we only consider real sensors in this loop
     for(i=0; i<numberOfDevices; ++i) {
         // is this the sensor we are looking for?
-        if ((x == sensorAddrs[i]->getName()) ||
-            (x == sensorAddrs[i]->getAddr())) {
+        if (addr == sensorAddrs[i]->getAddr()) {
             // found the sensor, save the remap
-            sensorAddrs[i]->setName(value);
-            return NULL;
+            sensorAddrs[i]->setName(name);
+            sensorAddrs[i]->setEnable(enable);
+            return;
+        }
+        if (name == sensorAddrs[i]->getName()) {
+            // found the sensor, save the enable only
+            sensorAddrs[i]->setEnable(enable);
+            return;
         }
     }
+}
 
-    // if we didn't find an existing sensor then let it be saved anyway
-    // as the sensor may appear later
+// read and process all configured remaps
+static void loadRemaps() {
+    int i;
+    String v;
+    String empty;
+    for(i=0; i<numberOfDevices; ++i) {
+        v = MyCfgGetString("remap",String(i),empty);
+        if (!v.isEmpty()) {
+            loadRemap(v);
+        }
+    }
+}
+
+// id is an arbitrary integer
+// value is addr space name [ space 1 for disable ]
+static const char * handleConfigRemap(const char * name, const String & id, String &value) {
+    int i;
+    i = id.toInt();
+    if ((i < 0) || (i >= numberOfDevices)) {
+        return "Invalid index";
+    }
+    i = value.indexOf(' ');
+    if (i == -1) {
+        return "sensor name missing";
+    }
+    if ((i+1) == value.length()) {
+        return "sensor name not present";
+    }
+    loadRemap(value);
     return NULL;
 }
 
@@ -350,6 +384,8 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
                     // found empty slot
                     f = new mysensor_fake(x);
                     add_sensor(f,true);
+                    // ensure it is enabled appropriately
+                    loadRemaps();
                 } else if (!(sensorAddrs[i]->getAddr().isEmpty())) {
                     // fakes do not have an address
                     continue;
@@ -475,7 +511,7 @@ void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
     interval_sample = MyCfgGetInt("temprep","poll",INTERVAL_SAMPLE);
     interval_report = MyCfgGetInt("temprep","submit",INTERVAL_REPORT);
 
-    pin = MyCfgGetInt("pin","ds18b20",-1);
+    pin = MyCfgGetInt("trpin","18b20",-1);
     if (pin != -1) {
         sensors = new DallasTemperature(new OneWire(pin));
 
@@ -507,7 +543,7 @@ void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
         }
     }
 
-    pin = MyCfgGetInt("pin","dht11",-1);
+    pin = MyCfgGetInt("trpin","dht11",-1);
     if (pin != -1) {
 #ifdef ADAFRUIT_DHT11
         dht11 = new DHT(pin, DHT11);
@@ -524,16 +560,18 @@ void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
     }
     // only create readers once we are ready
 
+    // read the name mappings from config
+    loadRemaps();
+
     // Route for root / web page
     server.on("/temperatures", HTTP_GET, serve_root_get);
     server.on("/api", HTTP_GET, serve_sensor_get);
     server.on("/fake", HTTP_GET, serve_sensor_fake);
 
     // register our config change handlers
-    MyCfgRegisterInt("pin",&handleConfigPin);
-    MyCfgRegisterString("remap",&handleConfigRemap);
+    MyCfgRegisterInt("trpin",&handleConfigPin);
+    MyCfgRegisterString("trremap",&handleConfigRemap);
     MyCfgRegisterInt("temprep",&handleInterval);
-    MyCfgRegisterInt("tr",&handleEnable);
 
 #ifndef ESP8266
     // ESP8266 must always run in loop
