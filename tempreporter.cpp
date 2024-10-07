@@ -25,7 +25,7 @@
 
 /*
 Config nodes:
-        remap.N = ADDR label [disable=1] TODO
+        trremap.N = ADDR label [disable=1]
         trpin.[18b20|dht11] = number
         temprep.poll = seconds
         temprep.submit = seconds
@@ -66,7 +66,8 @@ class mysensor {
             if (a != NULL && *a != 0) {
                 realAddress = a;
                 // load the remapping if present
-                str = MyCfgGetString("remap",a,a);
+                //str = MyCfgGetString("trremap",a,a);
+                // (handled elsewhere by calling loadremaps)
             }
         }
     private:
@@ -170,6 +171,7 @@ static const char index_html[] PROGMEM = R"rawliteral(
   <tr><th align="left">Sensor</th><th>Reading</th></tr>
   %TEMPPLACEHOLDER%
   </table>
+  <p>Sensors are refreshed every %REFRESHTIME% seconds.</p>
 </body>
 </html>
 )rawliteral";
@@ -302,9 +304,10 @@ static void loadRemaps() {
     int i;
     String v;
     String empty;
-    for(i=0; i<numberOfDevices; ++i) {
-        v = MyCfgGetString("remap",String(i),empty);
+    for(i=0; i<max_sensors; ++i) {
+        v = MyCfgGetString("trremap",String(i),empty);
         if (!v.isEmpty()) {
+            syslogf("Loading remap %d containing: %s",i,v);
             loadRemap(v);
         }
     }
@@ -429,11 +432,6 @@ time_t TR_report_data(void)
         return 60;
     }
 
-    // called back too early, tell the caller to wait again
-    if (next_report > now) {
-        return (next_report - now);
-    }
-
     if (sensors) {
         sensors->requestTemperatures(); // Send the command to get temperatures
     }
@@ -445,9 +443,9 @@ time_t TR_report_data(void)
 
     if (next_report == 0 || now >= next_report) {
         //Check WiFi connection status
-        while (WiFi.status()!= WL_CONNECTED) {
+        if (WiFi.status()!= WL_CONNECTED) {
             Serial.println("Wifi not connected!");
-            delay(500);
+            return 1;
         }
 
         char post_data[80 * numberOfDevices];
@@ -497,9 +495,11 @@ static void TR_reporting_task(void *)
     while (1) {
         time_t next = TR_report_data();
         time_t delaay = next - time(NULL);
-        if (delaay > 0) {
-            delay(delaay*1000);
+        if (delaay < 0) {
+            // block error conditions
+            delaay = 5;
         }
+        delay(delaay*1000);
     }
 }
 #endif
