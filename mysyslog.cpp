@@ -5,6 +5,8 @@
 #include <WiFiUdp.h>
 static WiFiUDP udpClient;
 Syslog *syslog = NULL;
+// TODO why do these syslogf variants screw up the passed arguments
+// first arg always becomes 26 or 33
 void syslogf(uint16_t pri, const char *fmt, ...) {
     if (syslog) {
         va_list args;
@@ -22,5 +24,5 @@ void syslogf(const char *fmt, ...) {
     }
 }
 void SyslogInit(const char * name) {
-    syslog = new Syslog(udpClient, MY_SYSLOG_SERVER, 514, name, name, LOG_DAEMON);
+    syslog = new Syslog(udpClient, MY_SYSLOG_SERVER, 514, name, name, LOG_DAEMON, SYSLOG_PROTO_BSD);
 }
