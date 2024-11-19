@@ -45,6 +45,7 @@ class WeatherForecast: public JsonHandler {
         int max_index = -1;
         float lowest_temp = 999.0;
         time_t now,limit;
+        bool finished = false;
 
     public:
         virtual void startDocument() {
@@ -74,7 +75,12 @@ class WeatherForecast: public JsonHandler {
         virtual void endDocument() {
             // copy lowest temp to exported value
             forecast_low_temp = round(lowest_temp);
+            finished = true;
         };
+
+        bool status() const {
+            return finished;
+        }
 
         virtual void value(ElementPath path, ElementValue value) {
             if (in_times) {
@@ -100,8 +106,9 @@ class WeatherForecast: public JsonHandler {
 };
 
 // go and read the forecast temperature
-static void TF_get_forecast()
+static bool TF_get_forecast()
 {
+    bool ret = false;
     HTTPClient http;
     std::unique_ptr<SECURE_CLIENT>client(new SECURE_CLIENT);
     client->setInsecure();
@@ -114,8 +121,10 @@ static void TF_get_forecast()
     if (httpCode == HTTP_CODE_OK)
     {
         http.writeToStream(&parser);
+        ret = custom_handler.status();
     }
     http.end();
+    return ret;
 }
 
 #ifdef ESP8266
@@ -126,13 +135,26 @@ Ticker TF_reporting_ticker;
 static void TF_reporting_task(void *)
 {
     time_t last = 0;
+    bool ret;
+    // wait a while for networking
+    delay(15000);
+
     while (1) {
-        TF_get_forecast();
+        ret = TF_get_forecast();
         time_t now = time(NULL);
-        if (last == 0) { last = now; }
-        last += (interval_sample * 3600);
-        if (last > now) {
-            delay((last - now)*1000);
+        if (ret) {
+            if (last == 0) { last = now; }
+            last += (interval_sample * 3600);
+            // if we took too long then reset the cycle
+            if (last <= now) {
+                last = now + (interval_sample * 3600);
+            }
+            if (last > now) {
+                delay((last - now)*1000);
+            }
+        } else {
+            // failed to get the temperature, try again in a minute
+            delay(60000);
         }
     }
 }
