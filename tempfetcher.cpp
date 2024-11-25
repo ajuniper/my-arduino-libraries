@@ -25,8 +25,8 @@ Config nodes:
 */
 
 // how frequently we take readings
-#define INTERVAL_SAMPLE 60
-static int interval_sample = INTERVAL_SAMPLE;
+#define INTERVAL_SAMPLE 60 // 1 hour
+static int interval_sample = INTERVAL_SAMPLE; // minutes
 static int forecast_lookahead = 12; // hours
 
 // https://api.open-meteo.com/v1/forecast?latitude=50.50000&longitude=-1.000000&hourly=temperature_2m&timezone=GMT&timeformat=unixtime&past_days=0&forecast_days=2
@@ -144,10 +144,10 @@ static void TF_reporting_task(void *)
         time_t now = time(NULL);
         if (ret) {
             if (last == 0) { last = now; }
-            last += (interval_sample * 3600);
+            last += (interval_sample * 60);
             // if we took too long then reset the cycle
             if (last <= now) {
-                last = now + (interval_sample * 3600);
+                last = now + (interval_sample * 60);
             }
             if (last > now) {
                 delay((last - now)*1000);
@@ -162,10 +162,10 @@ static void TF_reporting_task(void *)
 
 static const char * handleConfigInt(const char * name, const String & id, int &value) {
     if (id == "rate") {
-        // all ok, save the value
+        // all ok, save the value (input is minutes, save as seconds)
         interval_sample = value;
 #ifdef ESP8266
-        TF_reporting_ticker.attach(interval_sample, TF_get_forecast);
+        TF_reporting_ticker.attach(interval_sample * 60, TF_get_forecast);
 #endif
         return NULL;
     } else if (id == "ahead") {
@@ -192,7 +192,7 @@ void TF_init() {
     weather_url = MyCfgGetString("weather","url",weather_url);
 
 #ifdef ESP8266
-    TF_reporting_ticker.attach(interval_sample * 3600, TF_get_forecast);
+    TF_reporting_ticker.attach(interval_sample * 60, TF_get_forecast);
 #else
     xTaskCreate(TF_reporting_task, "TF", 10000, NULL, 1, NULL);
 #endif
