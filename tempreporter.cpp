@@ -417,6 +417,38 @@ static void serve_sensor_fake(AsyncWebServerRequest * request) {
     request->send(response);
 }
 
+// see what sensors we can find
+static void scan_onewire(bool isColdBoot) {
+    char msgbuf[80];
+    // Start up the sensor library
+    sensors->begin();
+
+    // Grab a count of devices on the wire
+    int n = sensors->getDeviceCount();
+    if (n > max_sensors) { n = max_sensors; }
+
+    // locate devices on the bus
+    sprintf(msgbuf,"Started with %d devices",n);
+    Serial.println(msgbuf);
+    if (isColdBoot) {
+        syslogf(msgbuf);
+    }
+
+    // Loop through each device, print out address
+    for(int i=0;i<n; i++){
+        DeviceAddress da;
+        // Search the wire for address
+        if(sensors->getAddress(da, i)){
+            add_sensor(new mysensor_ds18b20(sensors, da), isColdBoot);
+        } else {
+            sprintf(msgbuf,"Ghost device at %d", i);
+            Serial.println(msgbuf);
+            syslogf(msgbuf);
+        }
+    }
+}
+
+
 static time_t next_report = 0;
 time_t TR_report_data(void)
 {
@@ -424,17 +456,23 @@ time_t TR_report_data(void)
 
     // wait for time to be known
     if (now < 1000000000) {
-        return 1;
+        return now+1;
     }
 
     // no point continuing if there are no devices connected
     if (numberOfDevices == 0) {
-        return 60;
+        // if we are using onewire then have another scan
+        if (sensors) {
+            scan_onewire(false);
+        }
+        return now+60;
     }
 
     if (sensors) {
         sensors->requestTemperatures(); // Send the command to get temperatures
     }
+
+    // no need to sleep here, requestTemperatures is synchronous and waits til ready
 
     // Loop through each real device, record temperature data
     for(int i=0;i<numberOfDevices; i++){
@@ -445,7 +483,7 @@ time_t TR_report_data(void)
         //Check WiFi connection status
         if (WiFi.status()!= WL_CONNECTED) {
             Serial.println("Wifi not connected!");
-            return 1;
+            return now+1;
         }
 
         char post_data[80 * numberOfDevices];
@@ -505,7 +543,6 @@ static void TR_reporting_task(void *)
 #endif
 
 void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
-    char msgbuf[80];
     int pin = -1;
 
     interval_sample = MyCfgGetInt("temprep","poll",INTERVAL_SAMPLE);
@@ -514,33 +551,7 @@ void TR_init(AsyncWebServer & server, bool run_in_loop, bool isColdBoot){
     pin = MyCfgGetInt("trpin","18b20",-1);
     if (pin != -1) {
         sensors = new DallasTemperature(new OneWire(pin));
-
-        // Start up the sensor library
-        sensors->begin();
-
-        // Grab a count of devices on the wire
-        int n = sensors->getDeviceCount();
-        if (n > max_sensors) { n = max_sensors; }
-
-        // locate devices on the bus
-        sprintf(msgbuf,"Started with %d devices",n);
-        Serial.println(msgbuf);
-        if (isColdBoot) {
-            syslogf(msgbuf);
-        }
-
-        // Loop through each device, print out address
-        for(int i=0;i<n; i++){
-            DeviceAddress da;
-            // Search the wire for address
-            if(sensors->getAddress(da, i)){
-                add_sensor(new mysensor_ds18b20(sensors, da), isColdBoot);
-            } else {
-                sprintf(msgbuf,"Ghost device at %d", i);
-                Serial.println(msgbuf);
-                syslogf(msgbuf);
-            }
-        }
+        scan_onewire(isColdBoot);
     }
 
     pin = MyCfgGetInt("trpin","dht11",-1);
