@@ -94,6 +94,7 @@ class mysensor_ds18b20 : public mysensor {
         }
         virtual ~mysensor_ds18b20() {};
         virtual void updateReading() {
+            bus->requestTemperaturesByAddress(da);
             lastReading = bus->getTempC(da);
         };
     private:
@@ -467,12 +468,6 @@ time_t TR_report_data(void)
         }
         return now+60;
     }
-
-    if (sensors) {
-        sensors->requestTemperatures(); // Send the command to get temperatures
-    }
-
-    // no need to sleep here, requestTemperatures is synchronous and waits til ready
 
     // Loop through each real device, record temperature data
     for(int i=0;i<numberOfDevices; i++){
