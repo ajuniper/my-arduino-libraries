@@ -5,6 +5,7 @@
 #include <mysyslog.h>
 #include <myconfig.h>
 #include <Ticker.h>
+#include <esp_system.h>
 
 /*
 Config nodes:
@@ -97,7 +98,9 @@ static void wifi_gotip() {
     // Init and get the time
     Serial.println(WiFi.localIP());
     if (wifiColdBoot) {
-        syslogf(LOG_DAEMON | LOG_WARNING, "started");
+        String x("started, reason ");
+        x += String(esp_reset_reason());
+        syslogf(LOG_DAEMON | LOG_WARNING, x.c_str());
     }
 }
 static void wifi_disconnected() {
