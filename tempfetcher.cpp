@@ -46,6 +46,7 @@ class WeatherForecast: public JsonHandler {
         float lowest_temp = 999.0;
         time_t now,limit;
         bool finished = false;
+        bool saw_value = false;
 
     public:
         virtual void startDocument() {
@@ -74,8 +75,14 @@ class WeatherForecast: public JsonHandler {
 
         virtual void endDocument() {
             // copy lowest temp to exported value
-            forecast_low_temp = round(lowest_temp);
-            finished = true;
+            if (saw_value) {
+                forecast_low_temp = round(lowest_temp);
+            } else {
+                syslogf("No useful temperatures seen!");
+            }
+            // do not persist the lowest value we saw if we
+            // didn't actually see one
+            finished = saw_value;
         };
 
         bool status() const {
@@ -86,18 +93,19 @@ class WeatherForecast: public JsonHandler {
             if (in_times) {
                 if ((value.getInt() >= now) && (min_index == 999)) {
                     min_index = path.getIndex();
-                    Serial.println(min_index);
+                    //Serial.println(min_index);
                 }
                 if (value.getInt() <= limit) {
                     max_index = path.getIndex();
-                    Serial.println(max_index);
+                    //Serial.println(max_index);
                 }
             } else if (in_temps) {
                 if ((path.getIndex() >= min_index) &&
                     (path.getIndex() <= max_index) &&
                     (value.getFloat() < lowest_temp)) {
                     lowest_temp = value.getFloat();
-                    Serial.println(lowest_temp);
+                    saw_value = true;
+                    //Serial.println(lowest_temp);
                 }
             }
         };
@@ -122,6 +130,8 @@ static bool TF_get_forecast()
     {
         http.writeToStream(&parser);
         ret = custom_handler.status();
+    } else {
+        syslogf("Failed to retrieve forecast, status %d",httpCode);
     }
     http.end();
     return ret;
