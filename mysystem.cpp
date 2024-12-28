@@ -12,7 +12,7 @@
 // pip install .
 // PATH=$PATH:../xtensa-esp-elf-gdb/bin/ /c/Users/arepi/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/LocalCache/local-packages/Python312/Scripts/esp-coredump.exe  info_corefile -c ../coredump_test/core.dump ../coredump_test/build/esp32.esp32.esp32/coredump_test.ino.elf 
 //
-static void serve_core_get(AsyncWebServerRequest *request) {
+static void _serve_core_get(AsyncWebServerRequest *request) {
     String x;
     AsyncWebServerResponse *response = nullptr;
 
@@ -48,6 +48,19 @@ static void serve_core_get(AsyncWebServerRequest *request) {
     }
     response->addHeader("Connection", "close");
     request->send(response);
+}
+static void serve_core_get(AsyncWebServerRequest *request) {
+    bool erase = false;
+    if (request->hasParam("erase")) {
+        String x = request->getParam("erase")->value();
+        if (x == "true") {
+            erase = true;
+        }
+    }
+    _serve_core_get(request);
+    if (erase) {
+        esp_core_dump_image_erase();
+    }
 }
 
 static void serve_status_get(AsyncWebServerRequest *request) {
