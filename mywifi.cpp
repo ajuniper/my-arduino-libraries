@@ -5,7 +5,11 @@
 #include <mysyslog.h>
 #include <myconfig.h>
 #include <Ticker.h>
+#ifdef ESP8266
+#include <Esp.h>
+#else
 #include <esp_system.h>
+#endif
 
 /*
 Config nodes:
@@ -17,6 +21,8 @@ Config nodes:
 #ifndef ESP8266
 // ESP32 does not have a separate scheduler queue
 #define once_ms_scheduled once_ms
+#else
+#define WIFI_AUTH_OPEN AUTH_OPEN
 #endif
 
 // https://www.esp32.com/viewtopic.php?f=19&t=18979&sid=d768b1ce7fcbc02976e94a404c4c5e9f&start=10
@@ -99,7 +105,11 @@ static void wifi_gotip() {
     Serial.println(WiFi.localIP());
     if (wifiColdBoot) {
         String x("started, reason ");
+#ifdef ESP8266
+        x += ESP.getResetReason();
+#else
         x += String(esp_reset_reason());
+#endif
         syslogf(LOG_DAEMON | LOG_WARNING, x.c_str());
     }
 }
@@ -145,7 +155,7 @@ static void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info){
 }
 
 #ifdef ESP8266
-static void WiFiConnected(const WiFiEventStationModeGotIP& event){
+static void WiFiConnected(const WiFiEventStationModeConnected& event){
 #else
 static void WiFiConnected(WiFiEvent_t event, WiFiEventInfo_t info){
 #endif
@@ -180,8 +190,8 @@ void WIFI_init(const char * hostname, bool wait_for_wifi, bool isColdBoot) {
         wifi_disconnected_ticker.once_ms_scheduled(1000,wifi_disconnected);
     }
 #ifdef ESP8266
-    wifiGotIpHandler = WiFi.onStationModeConnected(WiFiGotIP);
-    wifiConnectHandler = WiFi.onStationModeGotIP(WiFiConnected);
+    wifiGotIpHandler = WiFi.onStationModeGotIP(WiFiGotIP);
+    wifiConnectHandler = WiFi.onStationModeConnected(WiFiConnected);
     wifiDisconnectHandler = WiFi.onStationModeDisconnected(WiFiStationDisconnected);
 #else
     WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
