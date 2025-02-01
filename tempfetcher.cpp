@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include "time.h"
 #include <my_secrets.h>
@@ -17,6 +16,8 @@
 #include <ArduinoStreamParser.h>
 #include "JsonHandler.h"
 
+// TODO fix ESP8266 mode to have a ticker called from loop
+
 /*
 Config nodes:
         fcst.rate (hours)
@@ -28,30 +29,82 @@ Config nodes:
 #define INTERVAL_SAMPLE 60 // 1 hour
 static int interval_sample = INTERVAL_SAMPLE; // minutes
 static int forecast_lookahead = 12; // hours
+static int forecast_lookbehind = 6; // hours
 
 // https://api.open-meteo.com/v1/forecast?latitude=50.50000&longitude=-1.000000&hourly=temperature_2m&timezone=GMT&timeformat=unixtime&past_days=0&forecast_days=2
 // look for .hourly.time[] > now and up to e.g. 6 hours ahead
 // pick lowest matching .hourly.temperature_2m[]
-String weather_url = "https://api.open-meteo.com/v1/forecast?latitude=" MY_LATITUDE "&longitude=" MY_LONGDITUDE "&hourly=temperature_2m&timezone=GMT&timeformat=unixtime&past_days=0&forecast_days=2";
+String weather_url = "https://api.open-meteo.com/v1/forecast?latitude=" MY_LATITUDE "&longitude=" MY_LONGDITUDE "&hourly=temperature_2m&timezone=GMT&timeformat=unixtime&past_days=1&forecast_days=2";
 
 int forecast_low_temp = 10;
+int historic_low_temp = 10;
+time_t temp_fetch_time = 0;
+#ifndef ESP8266
+static TaskHandle_t fetchtask_handle = NULL;
+#endif
+
+class tempMatcher {
+    private:
+        int min_index = 999;
+        int max_index = -1;
+        float lowest_temp = 999.0;
+        int earliest = 0;
+        int latest = 0;
+        bool saw_value = false;
+    public:
+        tempMatcher() {}
+        void reset(time_t from, time_t to) {
+            earliest = from;
+            latest = to;
+            min_index = 999;
+            max_index = -1;
+            lowest_temp = 999.0;
+            saw_value = false;
+        }
+        bool getTemp(int &temp) {
+            // do not persist the lowest value we saw if we
+            // didn't actually see one
+            if (saw_value) {
+                temp = round(lowest_temp);
+            }
+            return saw_value;
+        }
+        void processTime(int i, int x) {
+            if ((x >= earliest) && (min_index == 999)) {
+                min_index = i;
+            }
+            if (x <= latest) {
+                max_index = i;
+            }
+        }
+        void processValue(int i, float x) {
+            if ((i >= min_index) &&
+                (i <= max_index) &&
+                (x < lowest_temp)) {
+                lowest_temp = x;
+                saw_value = true;
+            }
+        }
+};
 
 class WeatherForecast: public JsonHandler {
 
     private:
         bool in_times = false;
         bool in_temps = false;
-        int min_index = 999;
-        int max_index = -1;
-        float lowest_temp = 999.0;
-        time_t now,limit;
+        tempMatcher forecast;
+        tempMatcher historic;
         bool finished = false;
-        bool saw_value = false;
+        time_t now = 0;
 
     public:
-        virtual void startDocument() {
+        WeatherForecast() {
             now = time(NULL);
-            limit = now + (forecast_lookahead*3600);
+        }
+
+        virtual void startDocument() {
+            forecast.reset(now, now + (forecast_lookahead*3600));
+            historic.reset(now - (forecast_lookbehind*3600), now);
         };
 
         virtual void startArray(ElementPath path) {
@@ -75,14 +128,14 @@ class WeatherForecast: public JsonHandler {
 
         virtual void endDocument() {
             // copy lowest temp to exported value
-            if (saw_value) {
-                forecast_low_temp = round(lowest_temp);
-            } else {
+            finished = false;
+            finished |= forecast.getTemp(forecast_low_temp);
+            finished |= historic.getTemp(historic_low_temp);
+            if (!finished) {
                 syslogf("No useful temperatures seen!");
+            } else {
+                temp_fetch_time = now;
             }
-            // do not persist the lowest value we saw if we
-            // didn't actually see one
-            finished = saw_value;
         };
 
         bool status() const {
@@ -91,22 +144,15 @@ class WeatherForecast: public JsonHandler {
 
         virtual void value(ElementPath path, ElementValue value) {
             if (in_times) {
-                if ((value.getInt() >= now) && (min_index == 999)) {
-                    min_index = path.getIndex();
-                    //Serial.println(min_index);
-                }
-                if (value.getInt() <= limit) {
-                    max_index = path.getIndex();
-                    //Serial.println(max_index);
-                }
+                int i = path.getIndex();
+                int x = value.getInt();
+                forecast.processTime(i,x);
+                historic.processTime(i,x);
             } else if (in_temps) {
-                if ((path.getIndex() >= min_index) &&
-                    (path.getIndex() <= max_index) &&
-                    (value.getFloat() < lowest_temp)) {
-                    lowest_temp = value.getFloat();
-                    saw_value = true;
-                    //Serial.println(lowest_temp);
-                }
+                int i = path.getIndex();
+                float x = value.getFloat();
+                forecast.processValue(i,x);
+                historic.processValue(i,x);
             }
         };
 
@@ -139,7 +185,17 @@ static bool TF_get_forecast()
 
 #ifdef ESP8266
 // ticker for ESP8266
+// TODO reschedule early if failed
+// see /c/Users/arepi/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/cores/esp8266/Schedule.h
 Ticker TF_reporting_ticker;
+static void ticker_task() {
+    TF_get_forecast();
+}
+
+static void schedule_get_forecast(int when) {
+    TF_reporting_ticker.attach(when, ticker_task);
+}
+
 #else
 // task wrapper for ESP32
 static void TF_reporting_task(void *)
@@ -148,10 +204,12 @@ static void TF_reporting_task(void *)
     bool ret;
     // wait a while for networking
     delay(15000);
+    int waittime;
 
     while (1) {
         ret = TF_get_forecast();
         time_t now = time(NULL);
+        waittime = 0;
         if (ret) {
             if (last == 0) { last = now; }
             last += (interval_sample * 60);
@@ -160,31 +218,45 @@ static void TF_reporting_task(void *)
                 last = now + (interval_sample * 60);
             }
             if (last > now) {
-                delay((last - now)*1000);
+                waittime = (last - now)*1000;
             }
         } else {
             // failed to get the temperature, try again in a minute
-            delay(60000);
+            waittime = 60000;
+        }
+
+        // 0 indicates timeout, else signalled
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waittime))) {
+            // we were signalled so reset the last time counter
+            last = 0;
         }
     }
 }
 #endif
 
 static const char * handleConfigInt(const char * name, const String & id, int &value) {
+    const char * ret = NULL;
     if (id == "rate") {
         // all ok, save the value (input is minutes, save as seconds)
         interval_sample = value;
-#ifdef ESP8266
-        TF_reporting_ticker.attach(interval_sample * 60, TF_get_forecast);
-#endif
-        return NULL;
     } else if (id == "ahead") {
         // all ok, save the value
         forecast_lookahead = value;
-        return NULL;
+    } else if (id == "behind") {
+        // all ok, save the value
+        forecast_lookbehind = value;
     } else {
-        return "forecast value not recognised";
+        ret = "forecast value not recognised";
     }
+    if (ret == NULL) {
+        // config changed so retrieve temperatures again
+#ifdef ESP8266
+        schedule_get_forecast(1);
+#else
+        xTaskNotifyGive( fetchtask_handle );
+#endif
+    }
+    return ret;
 }
 
 static const char * handleConfigUrl(const char * name, const String & id, String &value) {
@@ -199,12 +271,13 @@ static const char * handleConfigUrl(const char * name, const String & id, String
 void TF_init() {
     interval_sample = MyCfgGetInt("fcst","rate",interval_sample);
     forecast_lookahead = MyCfgGetInt("fcst","ahead",forecast_lookahead);
+    forecast_lookbehind = MyCfgGetInt("fcst","behind",forecast_lookbehind);
     weather_url = MyCfgGetString("weather","url",weather_url);
 
 #ifdef ESP8266
-    TF_reporting_ticker.attach(interval_sample * 60, TF_get_forecast);
+    schedule_get_forecast(interval_sample * 60);
 #else
-    xTaskCreate(TF_reporting_task, "TF", 10000, NULL, 1, NULL);
+    xTaskCreate(TF_reporting_task, "TF", 10000, NULL, 1, &fetchtask_handle);
 #endif
 
     // register our config change handlers
