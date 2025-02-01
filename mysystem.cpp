@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <mysystem.h>
 #include <mywebserver.h>
+#ifdef ESP8266
+#include <Esp.h>
+#else
 #include <esp_system.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
@@ -62,16 +65,25 @@ static void serve_core_get(AsyncWebServerRequest *request) {
         esp_core_dump_image_erase();
     }
 }
+#endif
 
 static void serve_status_get(AsyncWebServerRequest *request) {
     String x("<html><head><title>System Status</title></head><body><pre>");
     AsyncWebServerResponse *response = nullptr;
     x += "\nReset reason: ";
+#ifdef ESP8266
+    x += ESP.getResetReason();
+#else
     x += String(esp_reset_reason());
+#endif
     x += "\nHeap total free bytes: ";
+#ifdef ESP8266
+    x += String(ESP.getFreeHeap());
+#else
     x += String(esp_get_free_heap_size());
     x += "\nHeap minimum free bytes: ";
     x += String(esp_get_minimum_free_heap_size());
+#endif
     x += "\n";
 
     //char b[1024];
@@ -84,7 +96,9 @@ static void serve_status_get(AsyncWebServerRequest *request) {
 }
 
 void SYS_init() {
+#ifndef ESP8266
     esp_core_dump_init();
     server.on("/coredump",HTTP_GET, serve_core_get);
+#endif
     server.on("/status",HTTP_GET, serve_status_get);
 }
