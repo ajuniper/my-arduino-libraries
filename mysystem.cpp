@@ -13,10 +13,19 @@
 #include <esp_heap_caps.h>
 
 // pip install .
-// PATH=$PATH:../xtensa-esp-elf-gdb/bin/ /c/Users/arepi/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/LocalCache/local-packages/Python312/Scripts/esp-coredump.exe  info_corefile -c ../coredump_test/core.dump ../coredump_test/build/esp32.esp32.esp32/coredump_test.ino.elf 
+// PATH=$PATH:../xtensa-esp-elf-gdb/bin/ /c/Users/arepi/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/LocalCache/local-packages/Python312/Scripts/esp-coredump.exe  info_corefile -c ../coredump_test/core.dump ../coredump_test/build/esp32.esp32.esp32/coredump_test.ino.elf
 //
-static void _serve_core_get(AsyncWebServerRequest *request) {
+static void serve_core_get(AsyncWebServerRequest *request) {
+    bool erase = false;
     String x;
+    if (request->hasParam("erase")) {
+        x = request->getParam("erase")->value();
+        //Serial.printf("erase param %s\n",x.c_str());
+        if (x == "true") {
+            erase = true;
+            //Serial.println("doing core erase at end");
+        }
+    }
     AsyncWebServerResponse *response = nullptr;
 
     // esp_err_t esp_core_dump_image_get(size_t* out_addr, size_t *out_size);
@@ -37,7 +46,7 @@ static void _serve_core_get(AsyncWebServerRequest *request) {
         response = request->beginResponse(
             "application/octet-stream",
             out_size,
-            [partition, out_size](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            [partition, out_size, erase](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
                 //Write up to "maxLen" bytes into "buffer" and return the amount written.
                 size_t tosend = min(maxLen, out_size-index);
                 //memcpy(buffer,((const unsigned char *)out_addr)+index,tosend);
@@ -46,24 +55,20 @@ static void _serve_core_get(AsyncWebServerRequest *request) {
                     // abort the transfer
                     tosend = 0;
                 }
+                //Serial.printf("sending %d at %d\n",tosend,index);
+                if ((tosend == 0) || ((index+tosend) == out_size)) {
+                    if (erase) {
+                        esp_err_t z = esp_core_dump_image_erase();
+                        //Serial.printf("erased core dump %d\n",z);
+                        z = esp_partition_erase_range(partition,0,partition->size);
+                        //Serial.printf("erased partition %d\n",z);
+                    }
+                }
                 return tosend;
         });
     }
     response->addHeader("Connection", "close");
     request->send(response);
-}
-static void serve_core_get(AsyncWebServerRequest *request) {
-    bool erase = false;
-    if (request->hasParam("erase")) {
-        String x = request->getParam("erase")->value();
-        if (x == "true") {
-            erase = true;
-        }
-    }
-    _serve_core_get(request);
-    if (erase) {
-        esp_core_dump_image_erase();
-    }
 }
 #endif
 
@@ -75,6 +80,8 @@ static void serve_status_get(AsyncWebServerRequest *request) {
     x += ESP.getResetReason();
 #else
     x += String(esp_reset_reason());
+    x += "\nCore dump check: ";
+    x += esp_core_dump_image_check();
 #endif
     x += "\nHeap total free bytes: ";
 #ifdef ESP8266
@@ -83,6 +90,7 @@ static void serve_status_get(AsyncWebServerRequest *request) {
     x += String(esp_get_free_heap_size());
     x += "\nHeap minimum free bytes: ";
     x += String(esp_get_minimum_free_heap_size());
+
 #endif
     x += "\n";
 
