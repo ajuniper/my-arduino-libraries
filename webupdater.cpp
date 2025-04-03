@@ -11,6 +11,7 @@
 #else
 #define UPDATE_ERROR Update.errorString()
 #endif
+extern const char * build_time;
 
 static void serve_update_page(AsyncWebServerRequest *request, const String & msg, bool connclose=false) {
     String m = "<html><body>";
@@ -20,9 +21,7 @@ static void serve_update_page(AsyncWebServerRequest *request, const String & msg
         m+="</p>";
     }
     m+="<form method='POST' action='update' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update'></form><p/><p><a href=\"reboot\">Reboot</a></p><p>Build date: ";
-    m+=__DATE__;
-    m+=" ";
-    m+=__TIME__;
+    m+=build_time;
     m+="</p></body></html>";
     AsyncWebServerResponse *response = request->beginResponse(200, "text/html", m);
     if (connclose) {
