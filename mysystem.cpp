@@ -4,6 +4,7 @@
 #include <mywebserver.h>
 #include "LittleFS.h"
 #include "SPIFFS.h"
+#include <mysyslog.h>
 #ifdef ESP8266
 #include <Esp.h>
 #else
@@ -22,7 +23,6 @@ Ticker coredump_save_ticker;
 static void do_coredump_save() {
     if (time(NULL) < 10000000) {
         // we do not have time yet, wait a while
-        Serial.printf("T!");
         coredump_save_ticker.once_ms(1000, do_coredump_save);
         return;
     }
@@ -32,10 +32,10 @@ static void do_coredump_save() {
     esp_partition_iterator_t partition_it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, "coredump");
     if (ret != ESP_OK) {
         // no coredump present
-        Serial.printf("no coredump present\n");
+        //Serial.printf("no coredump present\n");
     } else if (partition_it == NULL) {
         // no coredump partition present
-        Serial.printf("no coredump partition present\n");
+        //Serial.printf("no coredump partition present\n");
     } else {
         const esp_partition_t * partition = esp_partition_get(partition_it);
         Serial.printf("Copying coredump size %d to littlefs\n",out_size);
@@ -44,7 +44,7 @@ static void do_coredump_save() {
         File file = LittleFS.open("/coredump.bin", FILE_WRITE);
         if (!file) {
             // failed to open file for writing
-            Serial.printf("Failed to open coredump file for writing\n");
+            syslogf(LOG_DAEMON | LOG_WARNING, "Failed to open coredump file for writing");
         } else {
             unsigned char buf[512];
             out_addr = 0;
@@ -57,7 +57,7 @@ static void do_coredump_save() {
                 }
                 if (file.write(buf,toread) != toread) {
                     // something broke during write
-                    Serial.printf("Failed to write to coredump file\n");
+                    syslogf(LOG_DAEMON | LOG_WARNING, "Failed to write to coredump file");
                     break;
                 }
                 out_size -= toread;
@@ -65,13 +65,13 @@ static void do_coredump_save() {
 
             }
             file.close();
-            Serial.printf("Wrote coredump file OK\n");
+            syslogf(LOG_DAEMON | LOG_WARNING, "Wrote coredump file OK");
 
             // erase coredump partition
             esp_err_t z = esp_core_dump_image_erase();
-            Serial.printf("erased core dump %d\n",z);
+            //Serial.printf("erased core dump %d\n",z);
             z = esp_partition_erase_range(partition,0,partition->size);
-            Serial.printf("erased partition %d\n",z);
+            //Serial.printf("erased partition %d\n",z);
         }
     }
 }
@@ -97,7 +97,7 @@ static void serve_core_get(AsyncWebServerRequest *request) {
         x = request->getParam("erase")->value();
         //Serial.printf("erase param %s\n",x.c_str());
         if (x == "true") {
-            Serial.printf("Wiping coredump\n");
+            //Serial.printf("Wiping coredump\n");
             LittleFS.remove("/coredump.bin");
             response = request->beginResponse(200, "text/plain", "Coredump erased");
         } else {
@@ -107,7 +107,6 @@ static void serve_core_get(AsyncWebServerRequest *request) {
 
     if (response == nullptr) {
         // serve coredump
-        Serial.printf("Serving coredump\n");
         File coredump = LittleFS.open("/coredump.bin", FILE_READ);
         if (!coredump) {
             // WTF?
@@ -117,7 +116,6 @@ static void serve_core_get(AsyncWebServerRequest *request) {
             // set multipart filename
             // Content-Disposition: attachment; filename="coredump-xxyyzz.bin"
             // coredump.getLastWrite() gives time_t
-            Serial.printf("Serving coredump size %d\n",coredump.size());
             char fakename[60];
             struct tm timeinfo;
             //getLocalTime(&timeinfo);
@@ -125,7 +123,6 @@ static void serve_core_get(AsyncWebServerRequest *request) {
             localtime_r(&filetime, &timeinfo);
             strftime(fakename, 60, "/coredump-%Y%m%d-%H%M%S.bin",&timeinfo);
             response = request->beginResponse(coredump, fakename, "application/octet-stream", true);
-            Serial.printf("Serving coredump: %s\n",fakename);
         }
     }
 
@@ -160,11 +157,9 @@ static void serve_makefs(AsyncWebServerRequest *request) {
         LittleFS.end();
         bool ret = false;
         if (littleFS) {
-            Serial.printf("creating littlefs filesystem\n");
             LittleFS.format();
             ret = LittleFS.begin();
         } else {
-            Serial.printf("creating SPIFFS filesystem\n");
             SPIFFS.format();
             ret = SPIFFS.begin();
         }
