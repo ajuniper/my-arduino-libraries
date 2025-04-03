@@ -21,8 +21,14 @@ bool redirectToRoot = false;
 #include "nvs_flash.h"
 static void serve_config_list(AsyncWebServerRequest * request) {
     String ls;
-    nvs_iterator_t it = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY);
-    while(it != NULL) {
+    nvs_iterator_t it = NULL;
+    esp_err_t res = ESP_OK;
+#if ESP_IDF_VERSION_MAJOR < 5
+    it = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY);
+#else
+    res = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY, &it);
+#endif
+    while ((res == ESP_OK) && (it != NULL)) {
         nvs_entry_info_t info;
         nvs_entry_info(it, &info);
         ls += info.namespace_name;
@@ -32,7 +38,11 @@ static void serve_config_list(AsyncWebServerRequest * request) {
         ls += String(info.type);
         ls += ")\n";
         // TODO print content size
+#if ESP_IDF_VERSION_MAJOR < 5
         it = nvs_entry_next(it);
+#else
+        res = nvs_entry_next(&it);
+#endif
     }
     nvs_release_iterator(it);
     AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", ls);
